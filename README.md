@@ -1,0 +1,57 @@
+# Earnings Trade Automation
+
+Automated trading bot for executing earnings calendar spread strategies using options, with robust risk management and workflow automation. Integrates with Google Sheets for trade tracking and Alpaca for order execution. Includes CI/CD with CircleCI.
+
+## Features
+- **Automated Earnings Calendar Spread Trading**: Opens and closes calendar spreads around earnings events based on strict screening criteria.
+- **Kelly Criterion Position Sizing**: Uses a 10% Kelly fraction for optimal, risk-managed position sizing.
+- **Google Sheets Integration**: Tracks trades and workflow status in a Google Sheet via Apps Script.
+- **Alpaca API Integration**: Places and closes trades automatically using Alpaca brokerage API.
+- **CI/CD with CircleCI**: Automated build and dependency checks with pip caching and build file retention.
+- **Configurable and Extensible**: Modular codebase for easy strategy tweaks and integration.
+
+## Quick Start
+
+### 1. Clone the Repository
+```bash
+git clone https://github.com/yourusername/earnings-calendar-spread-bot.git
+cd earnings-calendar-spread-bot
+```
+
+### 2. Set Up Environment Variables
+Create a `.env` file in the root directory with your credentials:
+```
+APCA_API_KEY_ID=your-alpaca-key
+APCA_API_SECRET_KEY=your-alpaca-secret
+APCA_API_BASE_URL=https://paper-api.alpaca.markets
+GOOGLE_SCRIPT_URL=your-google-apps-script-url
+```
+
+### 3. Install Dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Run the Bot
+```bash
+python automation.py
+```
+
+## Example Workflow
+- **Screen for Earnings**: Bot fetches tomorrow's earnings tickers.
+- **Screening & Sizing**: For each ticker, applies IV/volume/slope criteria and calculates position size using Kelly.
+- **Open Trades**: Places calendar spread trades at the correct time (BMO/AMC logic).
+- **Track & Close**: Monitors open trades and closes them at the correct time, updating Google Sheets.
+
+## CI/CD & Testing
+- CircleCI config is in `.circleci/config.yml`.
+- Pip install time and build file retention are logged in the build output.
+- To run tests locally, add your test scripts and run them as needed.
+
+
+## Disclaimer
+This software is provided solely for educational and research purposes. It is not intended to provide investment advice. The developers are not financial advisors and accept no responsibility for any financial decisions or losses resulting from the use of this software. Always consult a professional financial advisor before making any investment decisions.
+
+---
+
+*Happy trading, and trade responsibly!* 

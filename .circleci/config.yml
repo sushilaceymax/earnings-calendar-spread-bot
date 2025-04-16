@@ -1,0 +1,43 @@
+version: 2.1
+
+jobs:
+  build:
+    docker:
+      - image: cimg/python:3.10
+    steps:
+      - checkout
+      - run:
+          name: Show Python version
+          command: python --version
+      - restore_cache:
+          keys:
+            - v1-deps-{{ checksum "requirements.txt" }}
+      - run:
+          name: Time pip install
+          command: |
+            start=$(date +%s)
+            pip install -r requirements.txt
+            end=$(date +%s)
+            echo "Pip install duration: $((end-start)) seconds"
+      - save_cache:
+          key: v1-deps-{{ checksum "requirements.txt" }}
+          paths:
+            - ~/.cache/pip
+      - run:
+          name: List installed packages
+          command: pip list
+      - run:
+          name: Check for build files
+          command: |
+            find . -type d -name "__pycache__" || echo "No __pycache__ found"
+            find . -name "*.pyc" || echo "No .pyc files found"
+      - run:
+          name: List workspace files
+          command: ls -alR
+      # Build files are retained for inspection; no cleanup step is included.
+
+workflows:
+  version: 2
+  build_and_test:
+    jobs:
+      - build 
