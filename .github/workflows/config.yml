@@ -52,6 +52,16 @@ jobs:
       - name: List workspace files
         run: ls -alR
 
+      - name: Validate scheduled time
+        run: |
+          current_time=$(TZ="America/New_York" date +'%H:%M')
+          echo "Current ET Time: $current_time"
+          current_minutes=$((10#$(echo "$current_time" | cut -d: -f1)*60 + 10#$(echo "$current_time" | cut -d: -f2)))
+          if ! (( (current_minutes >= 575 && current_minutes <= 595) || (current_minutes >= 935 && current_minutes <= 955) )); then
+            echo "Not within valid time window (09:35-09:55 or 15:35-15:55 ET). Exiting."
+            exit 1
+          fi
+
       # Run the main bot (follows trade_key_points.md logic)
       - name: Run Earnings Calendar Spread Bot
         run: python trade_workflow.py

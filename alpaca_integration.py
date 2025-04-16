@@ -5,7 +5,12 @@ from dotenv import load_dotenv
 from alpaca.data.historical.option import OptionHistoricalDataClient
 from alpaca.data.requests import OptionChainRequest, OptionLatestQuoteRequest
 from alpaca.trading.requests import GetOptionContractsRequest
+from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest, OptionLegRequest
+from alpaca.trading.enums import OrderClass, TimeInForce, OrderSide, PositionIntent
 from datetime import datetime, timedelta
+import threading, time
+from alpaca.trading.requests import GetOrderByIdRequest
+from alpaca.trading.enums import OrderStatus
 
 load_dotenv()
 
@@ -45,29 +50,33 @@ def place_calendar_spread_order(symbol, quantity, expiry_short, expiry_long, str
         call_symbol_short = make_option_symbol(symbol, expiry_short, strike, 'C')
         call_symbol_long = make_option_symbol(symbol, expiry_long, strike, 'C')
 
-        order_data = {
-            "order_class": "mleg",
-            "time_in_force": "day",
-            "order_type": "net_credit",  # or "net_debit" depending on your intent
-            "legs": [
-                {
-                    "side": "sell",
-                    "position_intent": "sell_to_open",
-                    "symbol": call_symbol_short,
-                    "ratio_qty": str(quantity)
-                },
-                {
-                    "side": "buy",
-                    "position_intent": "buy_to_open",
-                    "symbol": call_symbol_long,
-                    "ratio_qty": str(quantity)
-                }
-            ]
-        }
-        if limit_price is not None:
-            order_data["limit_price"] = limit_price
-        order = client.submit_order(order_data)
+        # build multi-leg order using SDK models
+        legs = [
+            OptionLegRequest(
+                symbol=call_symbol_short,
+                ratio_qty=quantity,
+                side=OrderSide.SELL,
+                position_intent=PositionIntent.SELL_TO_OPEN
+            ),
+            OptionLegRequest(
+                symbol=call_symbol_long,
+                ratio_qty=quantity,
+                side=OrderSide.BUY,
+                position_intent=PositionIntent.BUY_TO_OPEN
+            )
+        ]
+        order_request = LimitOrderRequest(
+            order_class=OrderClass.MLEG,
+            time_in_force=TimeInForce.DAY,
+            qty=quantity,
+            legs=legs,
+            limit_price=limit_price if limit_price is not None else None
+        )
+        order = client.submit_order(order_request)
+
         print(f"Placed calendar spread order: {order}")
+        # monitor fill asynchronously
+        monitor_fill_async(client, order, lambda filled: print(f"Calendar spread opened and filled: {filled}"))
         return order
     except Exception as e:
         print(f"Error placing calendar spread order: {e}")
@@ -90,27 +99,32 @@ def close_calendar_spread_order(symbol, expiry_short, expiry_long, strike, quant
         call_symbol_short = make_option_symbol(symbol, expiry_short, strike, 'C')
         call_symbol_long = make_option_symbol(symbol, expiry_long, strike, 'C')
 
-        order_data = {
-            "order_class": "mleg",
-            "time_in_force": "day",
-            "order_type": "net_debit",  # or "net_credit" depending on your intent
-            "legs": [
-                {
-                    "side": "buy",
-                    "position_intent": "buy_to_close",
-                    "symbol": call_symbol_short,
-                    "ratio_qty": str(quantity)
-                },
-                {
-                    "side": "sell",
-                    "position_intent": "sell_to_close",
-                    "symbol": call_symbol_long,
-                    "ratio_qty": str(quantity)
-                }
-            ]
-        }
-        order = client.submit_order(order_data)
+        # build multi-leg market close order using SDK models
+        legs = [
+            OptionLegRequest(
+                symbol=call_symbol_short,
+                ratio_qty=quantity,
+                side=OrderSide.BUY,
+                position_intent=PositionIntent.BUY_TO_CLOSE
+            ),
+            OptionLegRequest(
+                symbol=call_symbol_long,
+                ratio_qty=quantity,
+                side=OrderSide.SELL,
+                position_intent=PositionIntent.SELL_TO_CLOSE
+            )
+        ]
+        order_request = MarketOrderRequest(
+            order_class=OrderClass.MLEG,
+            time_in_force=TimeInForce.DAY,
+            qty=quantity,
+            legs=legs
+        )
+        order = client.submit_order(order_request)
+
         print(f"Closed calendar spread order: {order}")
+        # monitor fill asynchronously
+        monitor_fill_async(client, order, lambda filled: print(f"Calendar spread closed and filled: {filled}"))
         return order
     except Exception as e:
         print(f"Error closing calendar spread order: {e}")
@@ -251,4 +265,30 @@ def get_option_spread_mid_price(symbol, expiry_short, expiry_long, strike, callp
         return float(long_mid - short_mid)
     except Exception as e:
         print(f"Error fetching Alpaca spread mid price: {e}")
-        return None 
+        return None
+
+
+def wait_for_fill(client, order_id, timeout=30, interval=1):
+    """
+    Poll an order until it is fully filled or timeout expires. Returns the filled order.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        ord = client.get_order_by_id(GetOrderByIdRequest(order_id=order_id))
+        if ord.status == OrderStatus.FILLED or float(getattr(ord, 'filled_qty', 0) or 0) == float(getattr(ord, 'qty', 0) or 0):
+            return ord
+        time.sleep(interval)
+    raise TimeoutError(f"Order {order_id} not filled in {timeout}s")
+
+
+def monitor_fill_async(client, order, on_filled, timeout=30, interval=1):
+    """
+    Start a daemon thread to wait for fill and call on_filled callback when done.
+    """
+    def _poll():
+        try:
+            filled = wait_for_fill(client, order.id, timeout=timeout, interval=interval)
+            on_filled(filled)
+        except Exception as e:
+            print(f"Fill monitor error for {order.id}: {e}")
+    threading.Thread(target=_poll, daemon=True).start() 
