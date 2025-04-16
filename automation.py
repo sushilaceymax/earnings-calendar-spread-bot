@@ -239,4 +239,4 @@ def main():
         print(entry)
 
 if __name__ == "__main__":
-    run_trade_workflow()
+    main()

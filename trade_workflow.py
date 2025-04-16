@@ -184,4 +184,7 @@ def run_trade_workflow():
                         }
                         post_trade(trade_data)
         except Exception as e:
-            print(f"Error screening/opening trade for {ticker}: {e}") 
+            print(f"Error screening/opening trade for {ticker}: {e}")
+
+if __name__ == "__main__":
+    run_trade_workflow() 

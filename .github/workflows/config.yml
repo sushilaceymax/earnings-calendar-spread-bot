@@ -1,0 +1,60 @@
+name: Earnings Trade Automation
+
+# This workflow runs on push, pull request, and at key US market times for trade open/close (per trade_key_points.md)
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # 9:45 AM ET (13:45 UTC) and 3:45 PM ET (19:45 UTC), Monday-Friday
+    - cron: '45 13 * * 1-5' # 9:45 AM ET, for closing trades
+    - cron: '45 19 * * 1-5' # 3:45 PM ET, for opening trades
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      APCA_API_KEY_ID: ${{ secrets.APCA_API_KEY_ID }}
+      APCA_API_SECRET_KEY: ${{ secrets.APCA_API_SECRET_KEY }}
+      APCA_API_BASE_URL: ${{ secrets.APCA_API_BASE_URL }}
+      GOOGLE_SCRIPT_URL: ${{ secrets.GOOGLE_SCRIPT_URL }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Time pip install
+        run: |
+          start=$(date +%s)
+          pip install -r requirements.txt
+          end=$(date +%s)
+          echo "Pip install duration: $((end-start)) seconds"
+
+      - name: List installed packages
+        run: pip list
+
+      - name: Check for build files
+        run: |
+          find . -type d -name "__pycache__" || echo "No __pycache__ found"
+          find . -name "*.pyc" || echo "No .pyc files found"
+
+      - name: List workspace files
+        run: ls -alR
+
+      # Run the main bot (follows trade_key_points.md logic)
+      - name: Run Earnings Calendar Spread Bot
+        run: python trade_workflow.py
+        # The bot logic (timing, sizing, etc.) is defined in trade_key_points.md 
