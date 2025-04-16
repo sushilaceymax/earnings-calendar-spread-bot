@@ -3,8 +3,10 @@ import requests
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, time
 from automation import compute_recommendation, get_tomorrows_earnings, get_todays_earnings
-from alpaca_integration import place_calendar_spread_order, close_calendar_spread_order, get_portfolio_value
+from alpaca_integration import place_calendar_spread_order, close_calendar_spread_order, get_portfolio_value, select_expiries_and_strike_alpaca, get_alpaca_option_chain, get_option_spread_mid_price
 import yfinance as yf
+from alpaca.data.historical import OptionHistoricalDataClient
+from alpaca.data.requests import OptionLatestQuoteRequest
 
 load_dotenv()
 GOOGLE_SCRIPT_URL = os.environ.get("GOOGLE_SCRIPT_URL")
@@ -62,27 +64,20 @@ def is_time_to_close(earnings_date, when):
         close_dt = datetime.combine(earnings_date + timedelta(days=1), open_time) + timedelta(minutes=15)
     return now >= close_dt and now < close_dt + timedelta(minutes=30)
 
-def select_expiries_and_strike(stock, earnings_date):
+def select_expiries_and_strike_yahoo(stock, earnings_date):
     """
-    Select front and back month expiries and ATM strike for the calendar spread.
-    - front: first expiry after earnings_date
-    - back: expiry closest to 30 days after front
-    - strike: closest to underlying price
-    Returns (expiry_short, expiry_long, strike) or (None, None, None) if not found.
+    (Renamed) Select front and back month expiries and ATM strike for the calendar spread using Yahoo Finance.
     """
     try:
         exp_dates = [datetime.strptime(d, "%Y-%m-%d").date() for d in stock.options]
         exp_dates = sorted(exp_dates)
-        # Find front month expiry (first after earnings)
         expiry_short = next((d for d in exp_dates if d > earnings_date), None)
         if not expiry_short:
             return None, None, None
-        # Find back month expiry (closest to 30 days after front)
         target_back = expiry_short + timedelta(days=30)
         expiry_long = min((d for d in exp_dates if d > expiry_short), key=lambda d: abs((d - target_back).days), default=None)
         if not expiry_long:
             return None, None, None
-        # Get ATM strike
         underlying_price = stock.history(period='1d')['Close'].iloc[0]
         chain = stock.option_chain(expiry_short.strftime('%Y-%m-%d'))
         strikes = chain.calls['strike'].tolist()
@@ -92,10 +87,9 @@ def select_expiries_and_strike(stock, earnings_date):
         print(f"Error selecting expiries/strike: {e}")
         return None, None, None
 
-def calculate_calendar_spread_cost(stock, expiry_short, expiry_long, strike):
+def calculate_calendar_spread_cost_yahoo(stock, expiry_short, expiry_long, strike):
     """
-    Calculate the cost of the calendar spread (mid prices).
-    Returns total debit per spread (float) or None if not found.
+    (Renamed) Calculate the cost of the calendar spread (mid prices) using Yahoo Finance.
     """
     try:
         chain_short = stock.option_chain(expiry_short)
@@ -104,7 +98,6 @@ def calculate_calendar_spread_cost(stock, expiry_short, expiry_long, strike):
         call_long = chain_long.calls.loc[chain_long.calls['strike'] == strike]
         if call_short.empty or call_long.empty:
             return None
-        # Use mid price (average of bid/ask)
         short_mid = (call_short['bid'].iloc[0] + call_short['ask'].iloc[0]) / 2
         long_mid = (call_long['bid'].iloc[0] + call_long['ask'].iloc[0]) / 2
         cost = long_mid - short_mid
@@ -174,14 +167,24 @@ def run_trade_workflow():
                 if is_time_to_open(earnings_date, when_norm):
                     print(f"Preparing BMO trade for {ticker} ({when_norm})...")
                     stock = yf.Ticker(ticker)
-                    expiry_short, expiry_long, strike = select_expiries_and_strike(stock, earnings_date)
+                    expiry_short, expiry_long, strike = select_expiries_and_strike_alpaca(ticker, earnings_date)
+                    if not expiry_short or not expiry_long or not strike:
+                        print(f"Could not determine expiries/strike for {ticker} using Alpaca. Trying Yahoo...")
+                        stock = yf.Ticker(ticker)
+                        expiry_short, expiry_long, strike = select_expiries_and_strike_yahoo(stock, earnings_date)
                     if not expiry_short or not expiry_long or not strike:
                         print(f"Could not determine expiries/strike for {ticker}. Skipping.")
                         continue
-                    spread_cost = calculate_calendar_spread_cost(stock, expiry_short, expiry_long, strike)
+                    spread_cost = get_option_spread_mid_price(ticker, expiry_short, expiry_long, strike)
+                    if not spread_cost or spread_cost <= 0:
+                        print(f"Invalid spread cost for {ticker} using Alpaca. Trying Yahoo...")
+                        stock = yf.Ticker(ticker)
+                        spread_cost = calculate_calendar_spread_cost_yahoo(stock, expiry_short, expiry_long, strike)
                     if not spread_cost or spread_cost <= 0:
                         print(f"Invalid spread cost for {ticker}. Skipping.")
                         continue
+                    # Fetch live mid price for limit order
+                    limit_price = get_option_spread_mid_price(ticker, expiry_short, expiry_long, strike)
                     kelly_fraction = 0.10
                     max_allocation = portfolio_value * kelly_fraction
                     quantity = int(max_allocation // (spread_cost * 100))  # 1 contract = 100 shares
@@ -195,7 +198,8 @@ def run_trade_workflow():
                         quantity,
                         expiry_short,
                         expiry_long,
-                        strike
+                        strike,
+                        limit_price=limit_price
                     )
                     if order is None:
                         print(f"Order placement failed for {ticker}. Skipping posting to Google Sheets.")
@@ -242,14 +246,24 @@ def run_trade_workflow():
                 if is_time_to_open(earnings_date, when_norm):
                     print(f"Preparing AMC trade for {ticker} ({when_norm})...")
                     stock = yf.Ticker(ticker)
-                    expiry_short, expiry_long, strike = select_expiries_and_strike(stock, earnings_date)
+                    expiry_short, expiry_long, strike = select_expiries_and_strike_alpaca(ticker, earnings_date)
+                    if not expiry_short or not expiry_long or not strike:
+                        print(f"Could not determine expiries/strike for {ticker} using Alpaca. Trying Yahoo...")
+                        stock = yf.Ticker(ticker)
+                        expiry_short, expiry_long, strike = select_expiries_and_strike_yahoo(stock, earnings_date)
                     if not expiry_short or not expiry_long or not strike:
                         print(f"Could not determine expiries/strike for {ticker}. Skipping.")
                         continue
-                    spread_cost = calculate_calendar_spread_cost(stock, expiry_short, expiry_long, strike)
+                    spread_cost = get_option_spread_mid_price(ticker, expiry_short, expiry_long, strike)
+                    if not spread_cost or spread_cost <= 0:
+                        print(f"Invalid spread cost for {ticker} using Alpaca. Trying Yahoo...")
+                        stock = yf.Ticker(ticker)
+                        spread_cost = calculate_calendar_spread_cost_yahoo(stock, expiry_short, expiry_long, strike)
                     if not spread_cost or spread_cost <= 0:
                         print(f"Invalid spread cost for {ticker}. Skipping.")
                         continue
+                    # Fetch live mid price for limit order
+                    limit_price = get_option_spread_mid_price(ticker, expiry_short, expiry_long, strike)
                     kelly_fraction = 0.10
                     max_allocation = portfolio_value * kelly_fraction
                     quantity = int(max_allocation // (spread_cost * 100))  # 1 contract = 100 shares
@@ -263,7 +277,8 @@ def run_trade_workflow():
                         quantity,
                         expiry_short,
                         expiry_long,
-                        strike
+                        strike,
+                        limit_price=limit_price
                     )
                     if order is None:
                         print(f"Order placement failed for {ticker}. Skipping posting to Google Sheets.")

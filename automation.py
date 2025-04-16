@@ -17,6 +17,10 @@ import threading
 import urllib.parse
 import os
 from dotenv import load_dotenv
+import argparse
+from alpaca_integration import get_alpaca_option_chain
+from alpaca.data.historical.option import OptionHistoricalDataClient
+from alpaca.data.requests import OptionLatestQuoteRequest
 
 # Load environment variables from .env file
 load_dotenv()
@@ -112,76 +116,125 @@ def compute_recommendation(ticker):
         ticker = ticker.strip().upper()
         if not ticker:
             return "No stock symbol provided."
-        
-        try:
-            stock = yf.Ticker(ticker)
-            if len(stock.options) == 0:
-                raise KeyError()
-        except KeyError:
-            return f"Error: No options found for stock symbol '{ticker}'."
-        
-        exp_dates = list(stock.options)
-        try:
-            exp_dates = filter_dates(exp_dates)
-        except:
-            return "Error: Not enough option data."
-        
-        options_chains = {}
-        for exp_date in exp_dates:
-            options_chains[exp_date] = stock.option_chain(exp_date)
-        
-        try:
-            underlying_price = get_current_price(stock)
-            if underlying_price is None:
-                raise ValueError("No market price found.")
-        except Exception:
-            return "Error: Unable to retrieve underlying stock price."
-        
+        # Try Alpaca first
+        option_chain = get_alpaca_option_chain(ticker)
         atm_iv = {}
-        straddle = None 
-        i = 0
-        for exp_date, chain in options_chains.items():
-            calls = chain.calls
-            puts = chain.puts
-
-            if calls.empty or puts.empty:
-                continue
-
-            call_diffs = (calls['strike'] - underlying_price).abs()
-            call_idx = call_diffs.idxmin()
-            call_iv = calls.loc[call_idx, 'impliedVolatility']
-
-            put_diffs = (puts['strike'] - underlying_price).abs()
-            put_idx = put_diffs.idxmin()
-            put_iv = puts.loc[put_idx, 'impliedVolatility']
-
-            atm_iv_value = (call_iv + put_iv) / 2.0
-            atm_iv[exp_date] = atm_iv_value
-
-            if i == 0:
-                call_bid = calls.loc[call_idx, 'bid']
-                call_ask = calls.loc[call_idx, 'ask']
-                put_bid = puts.loc[put_idx, 'bid']
-                put_ask = puts.loc[put_idx, 'ask']
-                
-                if call_bid is not None and call_ask is not None:
-                    call_mid = (call_bid + call_ask) / 2.0
-                else:
-                    call_mid = None
-
-                if put_bid is not None and put_ask is not None:
-                    put_mid = (put_bid + put_ask) / 2.0
-                else:
-                    put_mid = None
-
-                if call_mid is not None and put_mid is not None:
-                    straddle = (call_mid + put_mid)
-
-            i += 1
-        
+        straddle = None
+        alpaca_success = False
+        if option_chain:
+            try:
+                exp_dates = sorted(option_chain.keys())
+                today = datetime.today().date()
+                exp_dates_filtered = [d for d in exp_dates if (datetime.strptime(d, "%Y-%m-%d").date() - today).days >= 0]
+                if len(exp_dates_filtered) < 2:
+                    raise Exception("Not enough option data from Alpaca.")
+                underlying_price = None
+                try:
+                    from alpaca.data.historical import StockHistoricalDataClient
+                    from alpaca.data.requests import StockLatestBarRequest
+                    API_KEY = os.environ.get("APCA_API_KEY_ID")
+                    API_SECRET = os.environ.get("APCA_API_SECRET_KEY")
+                    stock_client = StockHistoricalDataClient(API_KEY, API_SECRET)
+                    bar_resp = stock_client.get_stock_latest_bar(StockLatestBarRequest(symbol_or_symbols=ticker))
+                    if bar_resp and ticker.upper() in bar_resp:
+                        underlying_price = bar_resp[ticker.upper()].close
+                except Exception:
+                    pass
+                if underlying_price is None:
+                    stock = yf.Ticker(ticker)
+                    underlying_price = stock.history(period='1d')['Close'].iloc[0]
+                options_client = OptionHistoricalDataClient(
+                    api_key=os.environ.get("APCA_API_KEY_ID"),
+                    secret_key=os.environ.get("APCA_API_SECRET_KEY")
+                )
+                for exp_date in exp_dates_filtered:
+                    strikes = option_chain[exp_date].keys()
+                    if not strikes:
+                        continue
+                    strike = min(strikes, key=lambda x: abs(x - underlying_price))
+                    call_contract = option_chain[exp_date][strike].get('call')
+                    put_contract = option_chain[exp_date][strike].get('put')
+                    if not call_contract or not put_contract:
+                        continue
+                    call_symbol = call_contract.symbol
+                    put_symbol = put_contract.symbol
+                    req = OptionLatestQuoteRequest(symbol_or_symbols=[call_symbol, put_symbol])
+                    quote_resp = options_client.get_option_latest_quote(req)
+                    call_quote = quote_resp.get(call_symbol)
+                    put_quote = quote_resp.get(put_symbol)
+                    if not call_quote or not put_quote:
+                        continue
+                    call_bid = call_quote.bid_price
+                    call_ask = call_quote.ask_price
+                    put_bid = put_quote.bid_price
+                    put_ask = put_quote.ask_price
+                    call_iv = getattr(call_contract, 'implied_volatility', None)
+                    put_iv = getattr(put_contract, 'implied_volatility', None)
+                    if call_iv is None or put_iv is None:
+                        continue
+                    atm_iv_value = (call_iv + put_iv) / 2.0
+                    atm_iv[exp_date] = atm_iv_value
+                    if straddle is None:
+                        if None not in (call_bid, call_ask, put_bid, put_ask):
+                            call_mid = (call_bid + call_ask) / 2.0
+                            put_mid = (put_bid + put_ask) / 2.0
+                            straddle = (call_mid + put_mid)
+                if atm_iv:
+                    alpaca_success = True
+            except Exception as e:
+                print(f"Alpaca option chain error: {e}")
+        if not alpaca_success:
+            # Fallback to Yahoo
+            try:
+                stock = yf.Ticker(ticker)
+                if len(stock.options) == 0:
+                    raise KeyError()
+            except KeyError:
+                return f"Error: No options found for stock symbol '{ticker}'."
+            exp_dates = list(stock.options)
+            try:
+                exp_dates = filter_dates(exp_dates)
+            except:
+                return "Error: Not enough option data."
+            options_chains = {}
+            for exp_date in exp_dates:
+                options_chains[exp_date] = stock.option_chain(exp_date)
+            try:
+                underlying_price = stock.history(period='1d')['Close'].iloc[0]
+            except Exception:
+                return "Error: Unable to retrieve underlying stock price."
+            i = 0
+            for exp_date, chain in options_chains.items():
+                calls = getattr(chain, 'calls', None)
+                puts = getattr(chain, 'puts', None)
+                if calls is None or puts is None or calls.empty or puts.empty:
+                    continue
+                call_diffs = (calls['strike'] - underlying_price).abs()
+                call_idx = call_diffs.idxmin()
+                call_iv = calls.loc[call_idx, 'impliedVolatility']
+                put_diffs = (puts['strike'] - underlying_price).abs()
+                put_idx = put_diffs.idxmin()
+                put_iv = puts.loc[put_idx, 'impliedVolatility']
+                atm_iv_value = (call_iv + put_iv) / 2.0
+                atm_iv[exp_date] = atm_iv_value
+                if i == 0:
+                    call_bid = calls.loc[call_idx, 'bid']
+                    call_ask = calls.loc[call_idx, 'ask']
+                    put_bid = puts.loc[put_idx, 'bid']
+                    put_ask = puts.loc[put_idx, 'ask']
+                    if call_bid is not None and call_ask is not None:
+                        call_mid = (call_bid + call_ask) / 2.0
+                    else:
+                        call_mid = None
+                    if put_bid is not None and put_ask is not None:
+                        put_mid = (put_bid + put_ask) / 2.0
+                    else:
+                        put_mid = None
+                    if call_mid is not None and put_mid is not None:
+                        straddle = (call_mid + put_mid)
+                i += 1
         if not atm_iv:
             return "Error: Could not determine ATM IV for any expiration dates."
-        
         today = datetime.today().date()
         dtes = []
         ivs = []
@@ -190,22 +243,18 @@ def compute_recommendation(ticker):
             days_to_expiry = (exp_date_obj - today).days
             dtes.append(days_to_expiry)
             ivs.append(iv)
-        
         term_spline = build_term_structure(dtes, ivs)
-        
         ts_slope_0_45 = (term_spline(45) - term_spline(dtes[0])) / (45-dtes[0])
-        
+        # Use Yahoo for realized volatility and volume
+        stock = yf.Ticker(ticker)
         price_history = stock.history(period='3mo')
         iv30_rv30 = term_spline(30) / yang_zhang(price_history)
-
         avg_volume = price_history['Volume'].rolling(30).mean().dropna().iloc[-1]
-
         expected_move = str(round(straddle / underlying_price * 100,2)) + "%" if straddle else None
-
-        return {'avg_volume': avg_volume >= 1500000, 'iv30_rv30': iv30_rv30 >= 1.25, 'ts_slope_0_45': ts_slope_0_45 <= -0.00406, 'expected_move': expected_move} #Check that they are in our desired range (see video)
+        return {'avg_volume': avg_volume >= 1500000, 'iv30_rv30': iv30_rv30 >= 1.25, 'ts_slope_0_45': ts_slope_0_45 <= -0.00406, 'expected_move': expected_move}
     except Exception as e:
         print(f"Error for {ticker}: {e}")
-        raise Exception(f'Error occured processing')
+        return f"Error: {e}"
         
 
 def get_tomorrows_earnings():
@@ -237,22 +286,59 @@ def get_todays_earnings():
     return tickers
 
 def main():
-    tickers = get_tomorrows_earnings()
-    results = []
-    for ticker in tickers:
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--ignore-filters', action='store_true', help='Print all results regardless of filter criteria')
+    args = parser.parse_args()
+    ignore_filters = args.ignore_filters
+
+    # Process AMC earnings for today
+    todays = get_todays_earnings()
+    amc_tickers = [t for t in todays if t.get('when') and 'after' in t['when'].lower()]
+    print("\n--- AMC Earnings (Today) ---")
+    results_amc = []
+    for ticker in amc_tickers:
         try:
-            result = compute_recommendation(ticker)
-            if (
-                isinstance(result, dict)
-                and result.get('avg_volume')
-                and result.get('iv30_rv30')
-                and result.get('ts_slope_0_45')
-            ):
-                results.append({'ticker': ticker, 'result': result})
+            symbol = ticker['act_symbol'] if isinstance(ticker, dict) else ticker
+            result = compute_recommendation(symbol)
+            if ignore_filters:
+                results_amc.append({'ticker': symbol, 'result': result})
+            else:
+                if (
+                    isinstance(result, dict)
+                    and result.get('avg_volume')
+                    and result.get('iv30_rv30')
+                    and result.get('ts_slope_0_45')
+                ):
+                    results_amc.append({'ticker': symbol, 'result': result})
         except Exception as e:
             print(f"Error for {ticker}: {e}")
             continue
-    for entry in results:
+    for entry in results_amc:
+        print(entry)
+
+    # Process BMO earnings for tomorrow
+    tomorrows = get_tomorrows_earnings()
+    bmo_tickers = [t for t in tomorrows if t.get('when') and 'before' in t['when'].lower()]
+    print("\n--- BMO Earnings (Tomorrow) ---")
+    results_bmo = []
+    for ticker in bmo_tickers:
+        try:
+            symbol = ticker['act_symbol'] if isinstance(ticker, dict) else ticker
+            result = compute_recommendation(symbol)
+            if ignore_filters:
+                results_bmo.append({'ticker': symbol, 'result': result})
+            else:
+                if (
+                    isinstance(result, dict)
+                    and result.get('avg_volume')
+                    and result.get('iv30_rv30')
+                    and result.get('ts_slope_0_45')
+                ):
+                    results_bmo.append({'ticker': symbol, 'result': result})
+        except Exception as e:
+            print(f"Error for {ticker}: {e}")
+            continue
+    for entry in results_bmo:
         print(entry)
 
 if __name__ == "__main__":
