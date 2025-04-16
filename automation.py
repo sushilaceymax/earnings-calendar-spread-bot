@@ -222,6 +222,20 @@ def get_tomorrows_earnings():
     ]
     return tickers
 
+def get_todays_earnings():
+    today = datetime.now().strftime('%Y-%m-%d')
+    base_url = "https://www.dolthub.com/api/v1alpha1/post-no-preference/earnings/master"
+    query = f"SELECT * FROM `earnings_calendar` where date = '{today}' ORDER BY `act_symbol` ASC, `date` ASC LIMIT 1000;"
+    url = f"{base_url}?q={urllib.parse.quote(query)}"
+    response = requests.get(url)
+    data = response.json()
+    # Return a list of dicts with act_symbol and when
+    tickers = [
+        {'act_symbol': row['act_symbol'], 'when': row.get('when')}
+        for row in data.get('rows', []) if 'act_symbol' in row
+    ]
+    return tickers
+
 def main():
     tickers = get_tomorrows_earnings()
     results = []
