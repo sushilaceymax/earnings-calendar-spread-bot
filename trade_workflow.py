@@ -119,36 +119,56 @@ def run_trade_workflow():
     open_trades = get_open_trades()
     for trade in open_trades:
         try:
-            earnings_date = datetime.strptime(trade['earnings_date'], "%Y-%m-%d").date()
-            when = trade.get('when', 'AMC')
+            earnings_date = datetime.strptime(trade['Open Date'], "%Y-%m-%d").date()
+            when = trade.get('When', 'AMC')  # If you have a 'When' column, else default
             if is_time_to_close(earnings_date, when):
-                print(f"Closing trade for {trade['symbol']}...")
-                close_calendar_spread_order(
-                    trade['symbol'],
-                    trade['expiry_short'],
-                    trade['expiry_long'],
-                    trade['strike'],
-                    trade['quantity']
+                print(f"Closing trade for {trade['Ticker']}...")
+                order = close_calendar_spread_order(
+                    trade['Ticker'],
+                    trade['Expiry Short'],
+                    trade['Expiry Long'],
+                    trade['Strike'],
+                    trade['Size']
                 )
-                trade['status'] = 'CLOSED'
-                trade['close_time'] = datetime.now().isoformat()
-                update_trade(trade)
+                # Try to fetch actual close price and commission from order response
+                close_price = 0
+                close_comm = 0
+                if order and hasattr(order, 'legs'):
+                    # Try to sum the fill prices for the legs (if available)
+                    try:
+                        close_price = sum([float(leg.filled_avg_price or 0) for leg in order.legs])
+                        close_comm = getattr(order, 'commission', 0) or 0
+                    except Exception:
+                        pass
+                update_trade({
+                    'Ticker': trade['Ticker'],
+                    'Open Date': trade['Open Date'],
+                    'Close Date': datetime.now().strftime('%Y-%m-%d'),
+                    'Close Price': close_price,
+                    'Close Comm.': close_comm
+                })
         except Exception as e:
             print(f"Error closing trade: {e}")
     # 2. Screen and open new trades
-    tickers = get_tomorrows_earnings()
+    ticker_dicts = get_tomorrows_earnings()
     portfolio_value = get_portfolio_value()
     if not portfolio_value:
         print("Could not fetch portfolio value. Skipping trade opening.")
         return
-    for ticker in tickers:
+    for ticker_info in ticker_dicts:
+        ticker = ticker_info['act_symbol']
+        when = ticker_info.get('when')
+        if not when:
+            print(f"Skipping {ticker}: no 'when' info available.")
+            continue
+        # Normalize 'when' to BMO/AMC
+        when_norm = 'BMO' if 'before' in (when or '').lower() else 'AMC'
         try:
             rec = compute_recommendation(ticker)
             if isinstance(rec, dict) and rec.get('avg_volume') and rec.get('iv30_rv30') and rec.get('ts_slope_0_45'):
                 earnings_date = datetime.now().date() + timedelta(days=1)
-                when = 'AMC'  # TODO: Replace with actual timing lookup if available
-                if is_time_to_open(earnings_date, when):
-                    print(f"Preparing trade for {ticker}...")
+                if is_time_to_open(earnings_date, when_norm):
+                    print(f"Preparing trade for {ticker} ({when_norm})...")
                     stock = yf.Ticker(ticker)
                     expiry_short, expiry_long, strike = select_expiries_and_strike(stock, earnings_date)
                     if not expiry_short or not expiry_long or not strike:
@@ -158,31 +178,29 @@ def run_trade_workflow():
                     if not spread_cost or spread_cost <= 0:
                         print(f"Invalid spread cost for {ticker}. Skipping.")
                         continue
-                    # Kelly position sizing: 10% of portfolio value / spread cost
                     kelly_fraction = 0.10
                     max_allocation = portfolio_value * kelly_fraction
                     quantity = int(max_allocation // (spread_cost * 100))  # 1 contract = 100 shares
                     if quantity < 1:
                         print(f"Kelly sizing yields 0 contracts for {ticker}. Skipping.")
                         continue
-                    print(f"Opening trade for {ticker}: {quantity}x {expiry_short}/{expiry_long} @ {strike}, cost/spread: ${spread_cost:.2f}, Kelly allocation: ${max_allocation:.2f}")
-                    order = place_calendar_spread_order(ticker, quantity, expiry_short, expiry_long, strike)
-                    if order:
-                        trade_data = {
-                            'symbol': ticker,
-                            'expiry_short': expiry_short,
-                            'expiry_long': expiry_long,
-                            'strike': strike,
-                            'quantity': quantity,
-                            'earnings_date': earnings_date.strftime('%Y-%m-%d'),
-                            'when': when,
-                            'status': 'OPEN',
-                            'open_time': datetime.now().isoformat(),
-                            'kelly_fraction': kelly_fraction,
-                            'spread_cost': spread_cost,
-                            'portfolio_value': portfolio_value
-                        }
-                        post_trade(trade_data)
+                    implied_move = rec.get('expected_move', '')
+                    print(f"Opening trade for {ticker}: {quantity}x {expiry_short}/{expiry_long} @ {strike}, cost/spread: ${spread_cost:.2f}, Kelly allocation: ${max_allocation:.2f}, Implied Move: {implied_move}")
+                    post_trade({
+                        'Ticker': ticker,
+                        'Implied Move': implied_move,
+                        'Structure': 'Calendar Spread',
+                        'Side': 'Long',
+                        'Size': quantity,
+                        'Open Date': datetime.now().strftime('%Y-%m-%d'),
+                        'Open Price': spread_cost,  # or actual fill price if available
+                        'Open Comm.': 0,
+                        'Close Date': '',
+                        'Close Price': '',
+                        'Close Comm.': ''
+                    })
+                else:
+                    print(f"Skipping {ticker}: not in correct time window to open trade ({when_norm}).")
         except Exception as e:
             print(f"Error screening/opening trade for {ticker}: {e}")
 

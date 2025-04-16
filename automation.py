@@ -215,7 +215,11 @@ def get_tomorrows_earnings():
     url = f"{base_url}?q={urllib.parse.quote(query)}"
     response = requests.get(url)
     data = response.json()
-    tickers = [row['act_symbol'] for row in data.get('rows', []) if 'act_symbol' in row]
+    # Return a list of dicts with act_symbol and when
+    tickers = [
+        {'act_symbol': row['act_symbol'], 'when': row.get('when')}
+        for row in data.get('rows', []) if 'act_symbol' in row
+    ]
     return tickers
 
 def main():
