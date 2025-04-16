@@ -7,6 +7,7 @@ from alpaca_integration import place_calendar_spread_order, close_calendar_sprea
 import yfinance as yf
 from alpaca.data.historical import OptionHistoricalDataClient
 from alpaca.data.requests import OptionLatestQuoteRequest
+from zoneinfo import ZoneInfo
 
 load_dotenv()
 GOOGLE_SCRIPT_URL = os.environ.get("GOOGLE_SCRIPT_URL")
@@ -47,22 +48,24 @@ def update_trade(trade_data):
         return None
 
 def is_time_to_open(earnings_date, when):
-    now = datetime.now()
+    eastern = ZoneInfo("America/New_York")
+    now = datetime.now(tz=eastern)
     market_close = time(16, 0)
     if when == "BMO":
-        open_dt = datetime.combine(earnings_date - timedelta(days=1), market_close) - timedelta(minutes=15)
+        open_dt = datetime.combine(earnings_date - timedelta(days=1), market_close, tzinfo=eastern) - timedelta(minutes=15)
     else:  # AMC
-        open_dt = datetime.combine(earnings_date, market_close) - timedelta(minutes=15)
-    return now >= open_dt and now < open_dt + timedelta(minutes=30)
+        open_dt = datetime.combine(earnings_date, market_close, tzinfo=eastern) - timedelta(minutes=15)
+    return open_dt <= now < open_dt + timedelta(minutes=30)
 
 def is_time_to_close(earnings_date, when):
-    now = datetime.now()
+    eastern = ZoneInfo("America/New_York")
+    now = datetime.now(tz=eastern)
     open_time = time(9, 30)
     if when == "BMO":
-        close_dt = datetime.combine(earnings_date, open_time) + timedelta(minutes=15)
+        close_dt = datetime.combine(earnings_date, open_time, tzinfo=eastern) + timedelta(minutes=15)
     else:  # AMC
-        close_dt = datetime.combine(earnings_date + timedelta(days=1), open_time) + timedelta(minutes=15)
-    return now >= close_dt and now < close_dt + timedelta(minutes=30)
+        close_dt = datetime.combine(earnings_date + timedelta(days=1), open_time, tzinfo=eastern) + timedelta(minutes=15)
+    return close_dt <= now < close_dt + timedelta(minutes=30)
 
 def select_expiries_and_strike_yahoo(stock, earnings_date):
     """

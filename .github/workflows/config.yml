@@ -3,9 +3,12 @@ name: Earnings Trade Automation
 # This workflow runs on push, pull request, and at key US market times for trade open/close (per trade_key_points.md)
 on:
   schedule:
-    # 9:45 AM ET (13:45 UTC) and 3:45 PM ET (19:45 UTC), Monday-Friday
-    - cron: '45 13 * * 1-5' # 9:45 AM ET, for closing trades
-    - cron: '45 19 * * 1-5' # 3:45 PM ET, for opening trades
+    # 9:45 AM ET (Eastern Time)
+    - cron: '45 13 * * 1-5' # 9:45 AM ET during EST (UTC-5)
+    - cron: '45 14 * * 1-5' # 9:45 AM ET during EDT (UTC-4)
+    # 3:45 PM ET (Eastern Time)
+    - cron: '45 19 * * 1-5' # 3:45 PM ET during EST (UTC-5)
+    - cron: '45 20 * * 1-5' # 3:45 PM ET during EDT (UTC-4)
 
 jobs:
   build:
