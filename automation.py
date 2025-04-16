@@ -17,7 +17,6 @@ import threading
 import urllib.parse
 import os
 from dotenv import load_dotenv
-from trade_workflow import run_trade_workflow
 
 # Load environment variables from .env file
 load_dotenv()

@@ -4,8 +4,6 @@ name: Earnings Trade Automation
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
   schedule:
     # 9:45 AM ET (13:45 UTC) and 3:45 PM ET (19:45 UTC), Monday-Friday
     - cron: '45 13 * * 1-5' # 9:45 AM ET, for closing trades
