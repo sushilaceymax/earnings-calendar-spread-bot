@@ -23,8 +23,8 @@ Create a `.env` file in the root directory with your credentials:
 ```
 APCA_API_KEY_ID=your-alpaca-key
 APCA_API_SECRET_KEY=your-alpaca-secret
-APCA_API_BASE_URL=https://paper-api.alpaca.markets
 GOOGLE_SCRIPT_URL=your-google-apps-script-url
+ALPACA_PAPER=true  # Set to 'false' to use live trading (default is 'true' for paper trading)
 ```
 
 ### 3. Install Dependencies

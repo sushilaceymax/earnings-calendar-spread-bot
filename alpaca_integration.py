@@ -7,12 +7,13 @@ load_dotenv()
 
 API_KEY = os.environ.get("APCA_API_KEY_ID")
 API_SECRET = os.environ.get("APCA_API_SECRET_KEY")
+PAPER = os.environ.get("ALPACA_PAPER", "true").lower() == "true"
 
 
 def init_alpaca_client():
     try:
-        client = TradingClient(API_KEY, API_SECRET, paper=True)
-        print("Alpaca client initialized.")
+        client = TradingClient(API_KEY, API_SECRET, paper=PAPER)
+        print(f"Alpaca client initialized. Paper mode: {PAPER}")
         return client
     except Exception as e:
         print(f"Error initializing Alpaca client: {e}")
