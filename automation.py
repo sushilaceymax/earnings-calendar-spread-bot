@@ -18,7 +18,7 @@ import urllib.parse
 import os
 from dotenv import load_dotenv
 import argparse
-from alpaca_integration import get_alpaca_option_chain
+from alpaca_integration import get_alpaca_option_chain, init_alpaca_client
 from alpaca.data.historical.option import OptionHistoricalDataClient
 from alpaca.data.requests import OptionLatestQuoteRequest, OptionSnapshotRequest
 
@@ -264,7 +264,17 @@ def compute_recommendation(ticker):
         
 
 def get_tomorrows_earnings():
-    tomorrow = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+    # Determine next open market day using Alpaca clock; fallback to next calendar day
+    client = init_alpaca_client()
+    if client:
+        try:
+            clock = client.get_clock()
+            next_open_date = clock.next_open.date()
+        except Exception:
+            next_open_date = (datetime.now() + timedelta(days=1)).date()
+    else:
+        next_open_date = (datetime.now() + timedelta(days=1)).date()
+    tomorrow = next_open_date.strftime('%Y-%m-%d')
     base_url = "https://www.dolthub.com/api/v1alpha1/post-no-preference/earnings/master"
     query = f"SELECT * FROM `earnings_calendar` where date = '{tomorrow}' ORDER BY `act_symbol` ASC, `date` ASC LIMIT 1000;"
     url = f"{base_url}?q={urllib.parse.quote(query)}"
