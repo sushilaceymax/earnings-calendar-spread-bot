@@ -62,7 +62,7 @@ jobs:
             exit 1
           fi
 
-      # Run the main bot (follows trade_key_points.md logic)
-      - name: Run Earnings Calendar Spread Bot
+   
+      - name: Run workflow
         run: python trade_workflow.py
         # The bot logic (timing, sizing, etc.) is defined in trade_key_points.md 
