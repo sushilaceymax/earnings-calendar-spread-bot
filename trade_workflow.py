@@ -180,11 +180,13 @@ def run_trade_workflow():
                 if is_time_to_open(earnings_date, when_norm):
                     print(f"Preparing BMO trade for {ticker} ({when_norm})...")
                     stock = yf.Ticker(ticker)
-                    expiry_short, expiry_long, strike = select_expiries_and_strike_alpaca(ticker, earnings_date)
+                    # allow same-day expiry for BMO by filtering from one day earlier
+                    filter_date = earnings_date - timedelta(days=1) if when_norm == 'BMO' else earnings_date
+                    expiry_short, expiry_long, strike = select_expiries_and_strike_alpaca(ticker, filter_date)
                     if not expiry_short or not expiry_long or not strike:
                         print(f"Could not determine expiries/strike for {ticker} using Alpaca. Trying Yahoo...")
                         stock = yf.Ticker(ticker)
-                        expiry_short, expiry_long, strike = select_expiries_and_strike_yahoo(stock, earnings_date)
+                        expiry_short, expiry_long, strike = select_expiries_and_strike_yahoo(stock, filter_date)
                     if not expiry_short or not expiry_long or not strike:
                         print(f"Could not determine expiries/strike for {ticker}. Skipping.")
                         continue

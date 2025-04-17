@@ -125,7 +125,8 @@ def compute_recommendation(ticker):
             try:
                 exp_dates = sorted(option_chain.keys())
                 today = datetime.today().date()
-                exp_dates_filtered = [d for d in exp_dates if (datetime.strptime(d, "%Y-%m-%d").date() - today).days >= 0]
+                # only consider expiries strictly after today (no 0DTE)
+                exp_dates_filtered = [d for d in exp_dates if (datetime.strptime(d, "%Y-%m-%d").date() - today).days > 0]
                 if len(exp_dates_filtered) < 2:
                     raise Exception("Not enough option data from Alpaca.")
                 underlying_price = None
@@ -151,41 +152,45 @@ def compute_recommendation(ticker):
                     strikes = option_chain[exp_date].keys()
                     if not strikes:
                         continue
-                    strike = min(strikes, key=lambda x: abs(x - underlying_price))
-                    call_contract = option_chain[exp_date][strike].get('call')
-                    put_contract = option_chain[exp_date][strike].get('put')
-                    if not call_contract or not put_contract:
+                    sorted_strikes = sorted(strikes, key=lambda s: abs(s - underlying_price))
+                    for strike in sorted_strikes:
+                        call_contract = option_chain[exp_date][strike].get('call')
+                        put_contract  = option_chain[exp_date][strike].get('put')
+                        if not call_contract or not put_contract:
+                            continue
+                        call_symbol = call_contract.symbol
+                        put_symbol  = put_contract.symbol
+                        req         = OptionSnapshotRequest(symbol_or_symbols=[call_symbol, put_symbol])
+                        snap_resp   = options_client.get_option_snapshot(req)
+                        call_snap   = snap_resp.get(call_symbol)
+                        put_snap    = snap_resp.get(put_symbol)
+                        if not call_snap or not put_snap:
+                            continue
+                        call_quote = call_snap.latest_quote
+                        put_quote  = put_snap.latest_quote
+                        if not call_quote or not put_quote:
+                            continue
+                        call_bid   = call_quote.bid_price
+                        call_ask   = call_quote.ask_price
+                        put_bid    = put_quote.bid_price
+                        put_ask    = put_quote.ask_price
+                        call_iv    = call_snap.implied_volatility
+                        put_iv     = put_snap.implied_volatility
+                        if call_iv is None or put_iv is None:
+                            continue
+                        atm_iv_value = (call_iv + put_iv) / 2.0
+                        atm_iv[exp_date] = atm_iv_value
+                        if straddle is None:
+                            if None not in (call_bid, call_ask, put_bid, put_ask):
+                                call_mid = (call_bid + call_ask) / 2.0
+                                put_mid = (put_bid + put_ask) / 2.0
+                                straddle = (call_mid + put_mid)
+                        break
+                    else:
+                        # no valid IV on nearby strikes, skip this expiry
                         continue
-                    call_symbol = call_contract.symbol
-                    put_symbol = put_contract.symbol
-                    # Use snapshot endpoint to get IV and latest quote
-                    req = OptionSnapshotRequest(symbol_or_symbols=[call_symbol, put_symbol])
-                    snap_resp = options_client.get_option_snapshot(req)
-                    call_snap = snap_resp.get(call_symbol)
-                    put_snap = snap_resp.get(put_symbol)
-                    if not call_snap or not put_snap:
-                        continue
-                    call_quote = call_snap.latest_quote
-                    put_quote = put_snap.latest_quote
-                    if not call_quote or not put_quote:
-                        continue
-                    call_bid = call_quote.bid_price
-                    call_ask = call_quote.ask_price
-                    put_bid = put_quote.bid_price
-                    put_ask = put_quote.ask_price
-                    # retrieve IV from snapshot
-                    call_iv = call_snap.implied_volatility
-                    put_iv = put_snap.implied_volatility
-                    if call_iv is None or put_iv is None:
-                        continue
-                    atm_iv_value = (call_iv + put_iv) / 2.0
-                    atm_iv[exp_date] = atm_iv_value
-                    if straddle is None:
-                        if None not in (call_bid, call_ask, put_bid, put_ask):
-                            call_mid = (call_bid + call_ask) / 2.0
-                            put_mid = (put_bid + put_ask) / 2.0
-                            straddle = (call_mid + put_mid)
-                if atm_iv:
+                # Only accept Alpaca data if there are at least two expiries worth of IVs
+                if len(atm_iv) >= 2:
                     alpaca_success = True
             except Exception as e:
                 print(f"Alpaca option chain error: {e}")
