@@ -3,7 +3,7 @@ import requests
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, time
 from automation import compute_recommendation, get_tomorrows_earnings, get_todays_earnings
-from alpaca_integration import place_calendar_spread_order, close_calendar_spread_order, get_portfolio_value, select_expiries_and_strike_alpaca, get_alpaca_option_chain, get_option_spread_mid_price
+from alpaca_integration import init_alpaca_client, place_calendar_spread_order, close_calendar_spread_order, get_portfolio_value, select_expiries_and_strike_alpaca, get_alpaca_option_chain, get_option_spread_mid_price
 import yfinance as yf
 from alpaca.data.historical import OptionHistoricalDataClient
 from alpaca.data.requests import OptionLatestQuoteRequest
@@ -111,6 +111,16 @@ def calculate_calendar_spread_cost_yahoo(stock, expiry_short, expiry_long, strik
 
 def run_trade_workflow():
     print("Running trade workflow...")
+    # 0. Market open check via Alpaca clock
+    client = init_alpaca_client()
+    if not client:
+        print("Could not initialize Alpaca client. Exiting.")
+        return
+    clock = client.get_clock()
+    if not getattr(clock, 'is_open', False):
+        print(f"Market is closed (next open at {clock.next_open}). Exiting.")
+        return
+    print(f"Market is open (current time: {clock.timestamp}). Continuing...")
     # 1. Close due trades
     open_trades = get_open_trades()
     for trade in open_trades:
