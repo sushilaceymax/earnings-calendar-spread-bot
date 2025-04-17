@@ -124,11 +124,11 @@ def compute_recommendation(ticker):
         if option_chain:
             try:
                 exp_dates = sorted(option_chain.keys())
-                today = datetime.today().date()
-                # only consider expiries strictly after today (no 0DTE)
-                exp_dates_filtered = [d for d in exp_dates if (datetime.strptime(d, "%Y-%m-%d").date() - today).days > 0]
-                if len(exp_dates_filtered) < 2:
-                    raise Exception("Not enough option data from Alpaca.")
+                # apply 45-day window and drop 0DTE using filter_dates()
+                try:
+                    exp_dates_filtered = filter_dates(exp_dates)
+                except ValueError:
+                    return "Error: Not enough option data."
                 underlying_price = None
                 try:
                     from alpaca.data.historical import StockHistoricalDataClient
