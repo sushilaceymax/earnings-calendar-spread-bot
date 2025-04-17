@@ -1,13 +1,12 @@
 # Earnings Trade Automation
 
-Automated trading bot for executing earnings calendar spread strategies using options, with robust risk management and workflow automation. Integrates with Google Sheets for trade tracking and Alpaca for order execution. Includes CI/CD with CircleCI.
+Automated trading bot for executing earnings calendar spread strategies using options, with robust risk management and workflow automation. Integrates with Google Sheets for trade tracking and Alpaca for order execution. 
 
 ## Features
 - **Automated Earnings Calendar Spread Trading**: Opens and closes calendar spreads around earnings events based on strict screening criteria.
 - **Kelly Criterion Position Sizing**: Uses a 10% Kelly fraction for optimal, risk-managed position sizing.
 - **Google Sheets Integration**: Tracks trades and workflow status in a Google Sheet via Apps Script.
 - **Alpaca API Integration**: Places and closes trades automatically using Alpaca brokerage API.
-- **CI/CD with CircleCI**: Automated build and dependency checks with pip caching and build file retention.
 - **Configurable and Extensible**: Modular codebase for easy strategy tweaks and integration.
 
 ## Quick Start
