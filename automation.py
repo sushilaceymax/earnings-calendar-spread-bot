@@ -195,6 +195,7 @@ def compute_recommendation(ticker):
             except Exception as e:
                 print(f"Alpaca option chain error: {e}")
         if not alpaca_success:
+            print("Falling back to Yahoo")
             # Fallback to Yahoo
             try:
                 stock = yf.Ticker(ticker)
