@@ -174,7 +174,7 @@ def get_alpaca_option_chain(symbol):
         req = GetOptionContractsRequest(
             underlying_symbols=[symbol.upper()],
             expiration_date_gte=today,
-            limit=1000
+            limit=10000
         )
         response = trading_client.get_option_contracts(req)
         contracts = response.option_contracts or []
