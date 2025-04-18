@@ -8,6 +8,7 @@ import yfinance as yf
 from alpaca.data.historical import OptionHistoricalDataClient
 from alpaca.data.requests import OptionLatestQuoteRequest
 from zoneinfo import ZoneInfo
+import sys
 
 load_dotenv()
 GOOGLE_SCRIPT_URL = os.environ.get("GOOGLE_SCRIPT_URL")
@@ -119,7 +120,7 @@ def run_trade_workflow():
     clock = client.get_clock()
     if not getattr(clock, 'is_open', False):
         print(f"Market is closed (next open at {clock.next_open}). Exiting.")
-        return
+        return 1
     print(f"Market is open (current time: {clock.timestamp}). Continuing...")
     # 1. Close due trades
     open_trades = get_open_trades()
@@ -325,4 +326,4 @@ def run_trade_workflow():
             print(f"Error screening/opening AMC trade for {ticker}: {e}")
 
 if __name__ == "__main__":
-    run_trade_workflow() 
+    sys.exit(run_trade_workflow())
