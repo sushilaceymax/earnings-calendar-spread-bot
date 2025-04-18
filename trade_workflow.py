@@ -9,11 +9,39 @@ from alpaca.data.historical import OptionHistoricalDataClient
 from alpaca.data.requests import OptionLatestQuoteRequest
 from zoneinfo import ZoneInfo
 import sys
+import sqlite3
 
 load_dotenv()
 GOOGLE_SCRIPT_URL = os.environ.get("GOOGLE_SCRIPT_URL")
+DB_PATH = "trades.db"
 
 # Google Apps Script integration functions
+
+def init_db():
+    """Initialize SQLite DB and trades table if it doesn't exist."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        '''CREATE TABLE IF NOT EXISTS trades (
+           "Ticker" TEXT,
+           "Implied Move" TEXT,
+           "Structure" TEXT,
+           "Side" TEXT,
+           "Size" INTEGER,
+           "Short Symbol" TEXT,
+           "Long Symbol" TEXT,
+           "Open Date" TEXT,
+           "Open Price" REAL,
+           "Open Comm." REAL,
+           "Close Date" TEXT,
+           "Close Price" REAL,
+           "Close Comm." REAL
+        )'''
+    )
+    conn.commit()
+    conn.close()
+
+init_db()
 
 def post_trade(trade_data):
     """POST a new trade to the Google Apps Script endpoint."""
@@ -21,20 +49,52 @@ def post_trade(trade_data):
         r = requests.post(GOOGLE_SCRIPT_URL, json=trade_data)
         r.raise_for_status()
         print(f"POST trade: {trade_data} -> {r.text}")
+        # insert into SQLite
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute(
+                """INSERT INTO trades ("Ticker","Implied Move","Structure","Side","Size","Short Symbol","Long Symbol","Open Date","Open Price","Open Comm.","Close Date","Close Price","Close Comm.")
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    trade_data.get('Ticker'),
+                    trade_data.get('Implied Move'),
+                    trade_data.get('Structure'),
+                    trade_data.get('Side'),
+                    trade_data.get('Size'),
+                    trade_data.get('Short Symbol'),
+                    trade_data.get('Long Symbol'),
+                    trade_data.get('Open Date'),
+                    trade_data.get('Open Price'),
+                    trade_data.get('Open Comm.'),
+                    trade_data.get('Close Date'),
+                    trade_data.get('Close Price'),
+                    trade_data.get('Close Comm.')
+                )
+            )
+            conn.commit()
+            conn.close()
+        except Exception as db_e:
+            print(f"Error inserting trade into SQLite: {db_e}")
         return r.text
     except Exception as e:
         print(f"Error posting trade: {e}")
         return None
 
 def get_open_trades():
-    """GET all 'OPEN' trades from the Google Apps Script endpoint."""
+    """Retrieve open trades from local SQLite DB instead of Google Apps Script."""
     try:
-        r = requests.get(GOOGLE_SCRIPT_URL + "?status=OPEN")
-        r.raise_for_status()
-        print("Fetched OPEN trades from Google Sheets.")
-        return r.json()
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM trades WHERE [Close Date] IS NULL OR [Close Date] = ''")
+        rows = cursor.fetchall()
+        col_names = [description[0] for description in cursor.description]
+        trades = [dict(zip(col_names, row)) for row in rows]
+        conn.close()
+        print("Fetched open trades from SQLite DB.")
+        return trades
     except Exception as e:
-        print(f"Error fetching open trades: {e}")
+        print(f"Error fetching open trades from SQLite DB: {e}")
         return []
 
 def update_trade(trade_data):
@@ -43,6 +103,28 @@ def update_trade(trade_data):
         r = requests.put(GOOGLE_SCRIPT_URL, json=trade_data)
         r.raise_for_status()
         print(f"Updated trade: {trade_data} -> {r.text}")
+        # update SQLite
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute(
+                """UPDATE trades
+                   SET "Close Date" = ?,
+                       "Close Price" = ?,
+                       "Close Comm." = ?
+                   WHERE "Ticker" = ? AND "Open Date" = ?""",
+                (
+                    trade_data.get('Close Date'),
+                    trade_data.get('Close Price'),
+                    trade_data.get('Close Comm.'),
+                    trade_data.get('Ticker'),
+                    trade_data.get('Open Date')
+                )
+            )
+            conn.commit()
+            conn.close()
+        except Exception as db_e:
+            print(f"Error updating trade in SQLite: {db_e}")
         return r.text
     except Exception as e:
         print(f"Error updating trade: {e}")
@@ -130,12 +212,11 @@ def run_trade_workflow():
             when = trade.get('When', 'AMC')  # If you have a 'When' column, else default
             if is_time_to_close(earnings_date, when):
                 print(f"Closing trade for {trade['Ticker']}...")
+                # use OCC symbols captured in DB
                 order = close_calendar_spread_order(
-                    trade['Ticker'],
-                    trade['Expiry Short'],
-                    trade['Expiry Long'],
-                    trade['Strike'],
-                    trade['Size']
+                    trade.get('Short Symbol'),
+                    trade.get('Long Symbol'),
+                    trade.get('Size')
                 )
                 # Try to fetch actual close price and commission from order response
                 close_price = 0
@@ -199,6 +280,12 @@ def run_trade_workflow():
                     if not spread_cost or spread_cost <= 0:
                         print(f"Invalid spread cost for {ticker}. Skipping.")
                         continue
+                    # Fetch OCC symbols from Alpaca chain
+                    chain = get_alpaca_option_chain(ticker)
+                    short_contract = chain.get(expiry_short, {}).get(strike, {}).get('call')
+                    long_contract = chain.get(expiry_long, {}).get(strike, {}).get('call')
+                    short_symbol = getattr(short_contract, 'symbol', None)
+                    long_symbol = getattr(long_contract, 'symbol', None)
                     # Fetch live mid price for limit order
                     limit_price = get_option_spread_mid_price(ticker, expiry_short, expiry_long, strike)
                     kelly_fraction = 0.10
@@ -210,11 +297,9 @@ def run_trade_workflow():
                     implied_move = rec.get('expected_move', '')
                     print(f"Opening BMO trade for {ticker}: {quantity}x {expiry_short}/{expiry_long} @ {strike}, cost/spread: ${spread_cost:.2f}, Kelly allocation: ${max_allocation:.2f}, Implied Move: {implied_move}")
                     order = place_calendar_spread_order(
-                        ticker,
+                        short_symbol,
+                        long_symbol,
                         quantity,
-                        expiry_short,
-                        expiry_long,
-                        strike,
                         limit_price=limit_price
                     )
                     if order is None:
@@ -229,6 +314,8 @@ def run_trade_workflow():
                         except Exception:
                             pass
                     post_trade({
+                        'Short Symbol': short_symbol,
+                        'Long Symbol': long_symbol,
                         'Ticker': ticker,
                         'Implied Move': implied_move,
                         'Structure': 'Calendar Spread',
@@ -278,7 +365,12 @@ def run_trade_workflow():
                     if not spread_cost or spread_cost <= 0:
                         print(f"Invalid spread cost for {ticker}. Skipping.")
                         continue
-                    # Fetch live mid price for limit order
+                    # Fetch OCC symbols from Alpaca chain for AMC
+                    chain = get_alpaca_option_chain(ticker)
+                    short_contract = chain.get(expiry_short, {}).get(strike, {}).get('call')
+                    long_contract = chain.get(expiry_long, {}).get(strike, {}).get('call')
+                    short_symbol = getattr(short_contract, 'symbol', None)
+                    long_symbol = getattr(long_contract, 'symbol', None)
                     limit_price = get_option_spread_mid_price(ticker, expiry_short, expiry_long, strike)
                     kelly_fraction = 0.10
                     max_allocation = portfolio_value * kelly_fraction
@@ -289,11 +381,9 @@ def run_trade_workflow():
                     implied_move = rec.get('expected_move', '')
                     print(f"Opening AMC trade for {ticker}: {quantity}x {expiry_short}/{expiry_long} @ {strike}, cost/spread: ${spread_cost:.2f}, Kelly allocation: ${max_allocation:.2f}, Implied Move: {implied_move}")
                     order = place_calendar_spread_order(
-                        ticker,
+                        short_symbol,
+                        long_symbol,
                         quantity,
-                        expiry_short,
-                        expiry_long,
-                        strike,
                         limit_price=limit_price
                     )
                     if order is None:
@@ -308,6 +398,8 @@ def run_trade_workflow():
                         except Exception:
                             pass
                     post_trade({
+                        'Short Symbol': short_symbol,
+                        'Long Symbol': long_symbol,
                         'Ticker': ticker,
                         'Implied Move': implied_move,
                         'Structure': 'Calendar Spread',

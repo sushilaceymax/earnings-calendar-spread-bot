@@ -29,37 +29,25 @@ def init_alpaca_client():
         return None
 
 
-def place_calendar_spread_order(symbol, quantity, expiry_short, expiry_long, strike, limit_price=None):
+def place_calendar_spread_order(short_symbol, long_symbol, quantity, limit_price=None):
     """
-    Place a call calendar spread (sell near-term call, buy longer-term call, same strike) using Alpaca's multi-leg order format.
+    Place a call calendar spread using provided OCC symbols for each leg.
     Optionally specify a limit_price for the spread order.
     """
     client = init_alpaca_client()
     if not client:
         return None
     try:
-        # Construct the option symbols according to OCC symbology (e.g., 'AAPL240621C00150000')
-        # You may need to adjust this to match your broker's requirements
-        def make_option_symbol(symbol, expiry, strike, callput):
-            # expiry: 'YYYY-MM-DD' -> 'YYMMDD'
-            expiry_fmt = expiry.replace('-', '')[2:]
-            # strike: float -> '00000000' (8 digits, 3 decimals, e.g., 150.0 -> '00150000')
-            strike_fmt = f"{int(float(strike) * 1000):08d}"
-            return f"{symbol.upper()}{expiry_fmt}{callput.upper()}{strike_fmt}"
-
-        call_symbol_short = make_option_symbol(symbol, expiry_short, strike, 'C')
-        call_symbol_long = make_option_symbol(symbol, expiry_long, strike, 'C')
-
-        # build multi-leg order using SDK models
+        # build multi-leg order using provided OCC symbols
         legs = [
             OptionLegRequest(
-                symbol=call_symbol_short,
+                symbol=short_symbol,
                 ratio_qty=quantity,
                 side=OrderSide.SELL,
                 position_intent=PositionIntent.SELL_TO_OPEN
             ),
             OptionLegRequest(
-                symbol=call_symbol_long,
+                symbol=long_symbol,
                 ratio_qty=quantity,
                 side=OrderSide.BUY,
                 position_intent=PositionIntent.BUY_TO_OPEN
@@ -70,7 +58,7 @@ def place_calendar_spread_order(symbol, quantity, expiry_short, expiry_long, str
             time_in_force=TimeInForce.DAY,
             qty=quantity,
             legs=legs,
-            limit_price=limit_price if limit_price is not None else None
+            limit_price=limit_price
         )
         order = client.submit_order(order_request)
 
@@ -83,32 +71,24 @@ def place_calendar_spread_order(symbol, quantity, expiry_short, expiry_long, str
         return None
 
 
-def close_calendar_spread_order(symbol, expiry_short, expiry_long, strike, quantity):
+def close_calendar_spread_order(short_symbol, long_symbol, quantity):
     """
-    Close both legs of the call calendar spread (buy to close short leg, sell to close long leg) using Alpaca's multi-leg order format.
+    Close both legs of the call calendar spread using provided OCC symbols.
     """
     client = init_alpaca_client()
     if not client:
         return None
     try:
-        def make_option_symbol(symbol, expiry, strike, callput):
-            expiry_fmt = expiry.replace('-', '')[2:]
-            strike_fmt = f"{int(float(strike) * 1000):08d}"
-            return f"{symbol.upper()}{expiry_fmt}{callput.upper()}{strike_fmt}"
-
-        call_symbol_short = make_option_symbol(symbol, expiry_short, strike, 'C')
-        call_symbol_long = make_option_symbol(symbol, expiry_long, strike, 'C')
-
         # build multi-leg market close order using SDK models
         legs = [
             OptionLegRequest(
-                symbol=call_symbol_short,
+                symbol=short_symbol,
                 ratio_qty=quantity,
                 side=OrderSide.BUY,
                 position_intent=PositionIntent.BUY_TO_CLOSE
             ),
             OptionLegRequest(
-                symbol=call_symbol_long,
+                symbol=long_symbol,
                 ratio_qty=quantity,
                 side=OrderSide.SELL,
                 position_intent=PositionIntent.SELL_TO_CLOSE
