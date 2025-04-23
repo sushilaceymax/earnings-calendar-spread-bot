@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 import threading, time
 from alpaca.trading.requests import GetOrderByIdRequest
 from alpaca.trading.enums import OrderStatus
+import math
 
 load_dotenv()
 
@@ -38,17 +39,26 @@ def place_calendar_spread_order(short_symbol, long_symbol, quantity, limit_price
     if not client:
         return None
     try:
+        # round the limit_price to two decimal places if provided
+        if limit_price is not None:
+            limit_price = round(limit_price, 2)
+        # simplify leg ratios so they are relatively prime
+        gcd_val = math.gcd(quantity, quantity)
+        ratio_qty_short = quantity // gcd_val
+        ratio_qty_long = quantity // gcd_val
+        if gcd_val > 1:
+            print(f"Simplified leg ratios from {quantity}:{quantity} to {ratio_qty_short}:{ratio_qty_long} using GCD {gcd_val}")
         # build multi-leg order using provided OCC symbols
         legs = [
             OptionLegRequest(
                 symbol=short_symbol,
-                ratio_qty=quantity,
+                ratio_qty=ratio_qty_short,
                 side=OrderSide.SELL,
                 position_intent=PositionIntent.SELL_TO_OPEN
             ),
             OptionLegRequest(
                 symbol=long_symbol,
-                ratio_qty=quantity,
+                ratio_qty=ratio_qty_long,
                 side=OrderSide.BUY,
                 position_intent=PositionIntent.BUY_TO_OPEN
             )
