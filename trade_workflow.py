@@ -237,6 +237,12 @@ def run_trade_workflow():
                 })
         except Exception as e:
             print(f"Error closing trade: {e}")
+    # Skip opening new trades during morning run to only close open orders
+    eastern = ZoneInfo("America/New_York")
+    now = datetime.now(tz=eastern)
+    if now.time() < time(12, 0):
+        print("Morning run: skipping opening new trades and API pulls.")
+        return
     # 2. Screen and open new trades
     # Fetch both today's and tomorrow's earnings
     todays_earnings = get_todays_earnings()
