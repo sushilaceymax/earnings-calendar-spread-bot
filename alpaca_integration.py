@@ -264,7 +264,7 @@ def wait_for_fill(client, order_id, timeout=30, interval=1):
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
-        ord = client.get_order_by_id(GetOrderByIdRequest(order_id=order_id))
+        ord = client.get_order_by_id(order_id)
         if ord.status == OrderStatus.FILLED or float(getattr(ord, 'filled_qty', 0) or 0) == float(getattr(ord, 'qty', 0) or 0):
             return ord
         time.sleep(interval)

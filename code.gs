@@ -24,8 +24,7 @@ function doPost(e) {
   var row = headers.map(function(header) { return data[header] || ""; });
   sheet.appendRow(row);
   return ContentService.createTextOutput("OK")
-    .setMimeType(ContentService.MimeType.TEXT)
-    .setHeader("Access-Control-Allow-Origin", "*");
+    .setMimeType(ContentService.MimeType.TEXT);
 }
 
 // Update a row by Ticker+Open Date (or any unique key)
@@ -46,20 +45,15 @@ function doPut(e) {
         }
       }
       return ContentService.createTextOutput("Updated")
-        .setMimeType(ContentService.MimeType.TEXT)
-        .setHeader("Access-Control-Allow-Origin", "*");
+        .setMimeType(ContentService.MimeType.TEXT);
     }
   }
   return ContentService.createTextOutput("Not found")
-    .setMimeType(ContentService.MimeType.TEXT)
-    .setHeader("Access-Control-Allow-Origin", "*");
+    .setMimeType(ContentService.MimeType.TEXT);
 }
 
 // CORS preflight
 function doOptions(e) {
   return ContentService.createTextOutput("")
-    .setMimeType(ContentService.MimeType.TEXT)
-    .setHeader("Access-Control-Allow-Origin", "*")
-    .setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS")
-    .setHeader("Access-Control-Allow-Headers", "Content-Type");
+    .setMimeType(ContentService.MimeType.TEXT);
 }
