@@ -221,10 +221,12 @@ def run_trade_workflow():
             when = trade.get('When', 'AMC')  # If you have a 'When' column, else default
             if is_time_to_close(earnings_date, when):
                 print(f"Closing trade for {trade['Ticker']}...")
+                # use creeping IOC close with callback
                 order = close_calendar_spread_order(
                     trade.get('Short Symbol'),
                     trade.get('Long Symbol'),
-                    trade.get('Size')
+                    trade.get('Size'),
+                    on_filled=_on_close_filled
                 )
                 # enqueue update when close-leg fills
                 def _on_close_filled(filled, t=trade):
@@ -316,11 +318,13 @@ def run_trade_workflow():
                         continue
                     implied_move = rec.get('expected_move', '')
                     print(f"Opening BMO trade for {ticker}: {quantity}x {expiry_short}/{expiry_long} @ {strike}, cost/spread: ${spread_cost:.2f}, Kelly allocation: ${max_allocation:.2f}, Implied Move: {implied_move}")
+                    # use creeping IOC open with callback
                     order = place_calendar_spread_order(
                         short_symbol,
                         long_symbol,
                         quantity,
-                        limit_price=limit_price
+                        limit_price=limit_price,
+                        on_filled=_on_open_filled
                     )
                     if order is None:
                         print(f"Order placement failed for {ticker}. Skipping posting to Google Sheets.")
@@ -403,11 +407,13 @@ def run_trade_workflow():
                         continue
                     implied_move = rec.get('expected_move', '')
                     print(f"Opening AMC trade for {ticker}: {quantity}x {expiry_short}/{expiry_long} @ {strike}, cost/spread: ${spread_cost:.2f}, Kelly allocation: ${max_allocation:.2f}, Implied Move: {implied_move}")
+                    # use creeping IOC open for AMC with callback
                     order = place_calendar_spread_order(
                         short_symbol,
                         long_symbol,
                         quantity,
-                        limit_price=limit_price
+                        limit_price=limit_price,
+                        on_filled=_on_open_amc_filled
                     )
                     if order is None:
                         print(f"Order placement failed for {ticker}. Skipping posting to Google Sheets.")

@@ -30,7 +30,7 @@ def init_alpaca_client():
         return None
 
 
-def place_calendar_spread_order(short_symbol, long_symbol, quantity, limit_price=None):
+def place_calendar_spread_order(short_symbol, long_symbol, quantity, limit_price=None, on_filled=None):
     """
     Place a call calendar spread using provided OCC symbols for each leg.
     Optionally specify a limit_price for the spread order.
@@ -63,24 +63,45 @@ def place_calendar_spread_order(short_symbol, long_symbol, quantity, limit_price
                 position_intent=PositionIntent.BUY_TO_OPEN
             )
         ]
-        order_request = LimitOrderRequest(
-            order_class=OrderClass.MLEG,
-            time_in_force=TimeInForce.DAY,
-            qty=quantity,
-            legs=legs,
-            limit_price=limit_price
-        )
-        order = client.submit_order(order_request)
-
-        print(f"Placed calendar spread order: {order}")
-        # monitor_fill_async(client, order, lambda filled: print(f"Calendar spread opened and filled: {filled}"))  # disabled for external fill handling
-        return order
+        # Fetch initial quotes for creeping logic
+        short_bid, short_ask, long_bid, long_ask = get_spread_quotes(short_symbol, long_symbol)
+        mid_spread = (long_bid + long_ask) / 2 - (short_bid + short_ask) / 2
+        max_price = long_ask - short_bid
+        price = mid_spread
+        step = 0.01
+        remaining = quantity
+        last_order = None
+        # Creeping IOC loop from mid toward ask
+        while remaining > 0 and price <= max_price:
+            lp = round(price, 2)
+            req = LimitOrderRequest(
+                order_class=OrderClass.MLEG,
+                time_in_force=TimeInForce.IOC,
+                qty=remaining,
+                legs=legs,
+                limit_price=lp
+            )
+            last_order = client.submit_order(req)
+            print(f"Placed IOC opening at limit ${lp}: {last_order}")
+            try:
+                filled = wait_for_fill(client, last_order.id, timeout=5)
+                filled_qty = int(float(getattr(filled, 'filled_qty', 0)))
+                remaining -= filled_qty
+                # fire callback for this partial/full fill
+                if on_filled:
+                    on_filled(filled)
+                if remaining <= 0:
+                    break
+            except TimeoutError:
+                pass
+            price += step
+        return last_order
     except Exception as e:
         print(f"Error placing calendar spread order: {e}")
         return None
 
 
-def close_calendar_spread_order(short_symbol, long_symbol, quantity):
+def close_calendar_spread_order(short_symbol, long_symbol, quantity, on_filled=None):
     """
     Close both legs of the call calendar spread using provided OCC symbols.
     """
@@ -103,17 +124,39 @@ def close_calendar_spread_order(short_symbol, long_symbol, quantity):
                 position_intent=PositionIntent.SELL_TO_CLOSE
             )
         ]
-        order_request = MarketOrderRequest(
-            order_class=OrderClass.MLEG,
-            time_in_force=TimeInForce.DAY,
-            qty=quantity,
-            legs=legs
-        )
-        order = client.submit_order(order_request)
-
-        print(f"Closed calendar spread order: {order}")
-        # monitor_fill_async(client, order, lambda filled: print(f"Calendar spread closed and filled: {filled}"))  # disabled for external fill handling
-        return order
+        # Fetch quotes for closing creeping logic
+        short_bid, short_ask, long_bid, long_ask = get_spread_quotes(short_symbol, long_symbol)
+        mid_spread = (long_bid + long_ask) / 2 - (short_bid + short_ask) / 2
+        min_price = long_bid - short_ask
+        price = mid_spread
+        step = 0.01
+        remaining = quantity
+        last_order = None
+        # Creeping IOC loop from mid down toward floor
+        while remaining > 0 and price >= min_price:
+            lp = round(price, 2)
+            req = LimitOrderRequest(
+                order_class=OrderClass.MLEG,
+                time_in_force=TimeInForce.IOC,
+                qty=remaining,
+                legs=legs,
+                limit_price=lp
+            )
+            last_order = client.submit_order(req)
+            print(f"Placed IOC closing at limit ${lp}: {last_order}")
+            try:
+                filled = wait_for_fill(client, last_order.id, timeout=5)
+                filled_qty = int(float(getattr(filled, 'filled_qty', 0)))
+                remaining -= filled_qty
+                # fire callback for this partial/full fill
+                if on_filled:
+                    on_filled(filled)
+                if remaining <= 0:
+                    break
+            except TimeoutError:
+                pass
+            price -= step
+        return last_order
     except Exception as e:
         print(f"Error closing calendar spread order: {e}")
         return None
@@ -256,20 +299,21 @@ def get_option_spread_mid_price(symbol, expiry_short, expiry_long, strike, callp
         return None
 
 
-def wait_for_fill(client, order_id, timeout=30, interval=1):
+def wait_for_fill(client, order_id, timeout=5, interval=1):
     """
     Poll an order until it is fully filled or timeout expires. Returns the filled order.
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
         ord = client.get_order_by_id(order_id)
-        if ord.status == OrderStatus.FILLED or float(getattr(ord, 'filled_qty', 0) or 0) == float(getattr(ord, 'qty', 0) or 0):
+        # Accept partial fills immediately
+        if float(getattr(ord, 'filled_qty', 0) or 0) > 0:
             return ord
         time.sleep(interval)
     raise TimeoutError(f"Order {order_id} not filled in {timeout}s")
 
 
-def monitor_fill_async(client, order, on_filled, timeout=30, interval=1):
+def monitor_fill_async(client, order, on_filled, timeout=5, interval=1):
     """
     Start a daemon thread to wait for fill and call on_filled callback when done.
     """
@@ -282,4 +326,21 @@ def monitor_fill_async(client, order, on_filled, timeout=30, interval=1):
     # spawn and return the thread object for external join
     t = threading.Thread(target=_poll, daemon=True)
     t.start()
-    return t 
+    return t
+
+
+def get_spread_quotes(short_symbol, long_symbol):
+    """
+    Return bid and ask prices for both option legs.
+    """
+    options_client = OptionHistoricalDataClient(
+        api_key=API_KEY,
+        secret_key=API_SECRET
+    )
+    req = OptionLatestQuoteRequest(symbol_or_symbols=[short_symbol, long_symbol])
+    quote_resp = options_client.get_option_latest_quote(req)
+    qs = quote_resp.get(short_symbol)
+    ql = quote_resp.get(long_symbol)
+    if not qs or not ql or None in (qs.bid_price, qs.ask_price, ql.bid_price, ql.ask_price):
+        raise RuntimeError(f"Could not fetch bid/ask for {short_symbol} or {long_symbol}")
+    return qs.bid_price, qs.ask_price, ql.bid_price, ql.ask_price 
