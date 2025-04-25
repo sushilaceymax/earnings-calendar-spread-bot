@@ -73,8 +73,7 @@ def place_calendar_spread_order(short_symbol, long_symbol, quantity, limit_price
         order = client.submit_order(order_request)
 
         print(f"Placed calendar spread order: {order}")
-        # monitor fill asynchronously
-        monitor_fill_async(client, order, lambda filled: print(f"Calendar spread opened and filled: {filled}"))
+        # monitor_fill_async(client, order, lambda filled: print(f"Calendar spread opened and filled: {filled}"))  # disabled for external fill handling
         return order
     except Exception as e:
         print(f"Error placing calendar spread order: {e}")
@@ -113,8 +112,7 @@ def close_calendar_spread_order(short_symbol, long_symbol, quantity):
         order = client.submit_order(order_request)
 
         print(f"Closed calendar spread order: {order}")
-        # monitor fill asynchronously
-        monitor_fill_async(client, order, lambda filled: print(f"Calendar spread closed and filled: {filled}"))
+        # monitor_fill_async(client, order, lambda filled: print(f"Calendar spread closed and filled: {filled}"))  # disabled for external fill handling
         return order
     except Exception as e:
         print(f"Error closing calendar spread order: {e}")
@@ -281,4 +279,7 @@ def monitor_fill_async(client, order, on_filled, timeout=30, interval=1):
             on_filled(filled)
         except Exception as e:
             print(f"Fill monitor error for {order.id}: {e}")
-    threading.Thread(target=_poll, daemon=True).start() 
+    # spawn and return the thread object for external join
+    t = threading.Thread(target=_poll, daemon=True)
+    t.start()
+    return t 

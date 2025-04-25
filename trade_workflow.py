@@ -3,13 +3,18 @@ import requests
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, time
 from automation import compute_recommendation, get_tomorrows_earnings, get_todays_earnings
-from alpaca_integration import init_alpaca_client, place_calendar_spread_order, close_calendar_spread_order, get_portfolio_value, select_expiries_and_strike_alpaca, get_alpaca_option_chain, get_option_spread_mid_price
+from alpaca_integration import init_alpaca_client, place_calendar_spread_order, close_calendar_spread_order, get_portfolio_value, select_expiries_and_strike_alpaca, get_alpaca_option_chain, get_option_spread_mid_price, monitor_fill_async
 import yfinance as yf
 from alpaca.data.historical import OptionHistoricalDataClient
 from alpaca.data.requests import OptionLatestQuoteRequest
 from zoneinfo import ZoneInfo
 import sys
 import sqlite3
+import queue
+
+# queue for filled trades and tracking threads
+trade_fill_queue = queue.Queue()
+trade_monitor_threads = []
 
 load_dotenv()
 GOOGLE_SCRIPT_URL = os.environ.get("GOOGLE_SCRIPT_URL")
@@ -194,6 +199,10 @@ def calculate_calendar_spread_cost_yahoo(stock, expiry_short, expiry_long, strik
 
 def run_trade_workflow():
     print("Running trade workflow...")
+    # reset any previous monitor threads and queued trades
+    trade_monitor_threads.clear()
+    while not trade_fill_queue.empty():
+        trade_fill_queue.get()
     # 0. Market open check via Alpaca clock
     client = init_alpaca_client()
     if not client:
@@ -212,31 +221,34 @@ def run_trade_workflow():
             when = trade.get('When', 'AMC')  # If you have a 'When' column, else default
             if is_time_to_close(earnings_date, when):
                 print(f"Closing trade for {trade['Ticker']}...")
-                # use OCC symbols captured in DB
                 order = close_calendar_spread_order(
                     trade.get('Short Symbol'),
                     trade.get('Long Symbol'),
                     trade.get('Size')
                 )
-                # Try to fetch actual close price and commission from order response
-                close_price = 0
-                close_comm = 0
-                if order and hasattr(order, 'legs'):
-                    # Try to sum the fill prices for the legs (if available)
-                    try:
-                        close_price = sum([float(leg.filled_avg_price or 0) for leg in order.legs])
-                        close_comm = getattr(order, 'commission', 0) or 0
-                    except Exception:
-                        pass
-                update_trade({
-                    'Ticker': trade['Ticker'],
-                    'Open Date': trade['Open Date'],
-                    'Close Date': datetime.now().strftime('%Y-%m-%d'),
-                    'Close Price': close_price,
-                    'Close Comm.': close_comm
-                })
+                # enqueue update when close-leg fills
+                def _on_close_filled(filled, t=trade):
+                    cp = sum([float(leg.filled_avg_price or 0) for leg in filled.legs])
+                    cc = getattr(filled, 'commission', 0) or 0
+                    data = {
+                        'Ticker': t['Ticker'],
+                        'Open Date': t['Open Date'],
+                        'Close Date': datetime.now().strftime('%Y-%m-%d'),
+                        'Close Price': cp,
+                        'Close Comm.': cc
+                    }
+                    trade_fill_queue.put((update_trade, data))
+                th = monitor_fill_async(client, order, _on_close_filled)
+                trade_monitor_threads.append(th)
         except Exception as e:
             print(f"Error closing trade: {e}")
+    # wait for all close-trade monitor threads before proceeding
+    for th in trade_monitor_threads:
+        th.join()
+    while not trade_fill_queue.empty():
+        func, pdata = trade_fill_queue.get()
+        func(pdata)
+    trade_monitor_threads.clear()
     # Skip opening new trades during morning run to only close open orders
     eastern = ZoneInfo("America/New_York")
     now = datetime.now(tz=eastern)
@@ -313,15 +325,8 @@ def run_trade_workflow():
                     if order is None:
                         print(f"Order placement failed for {ticker}. Skipping posting to Google Sheets.")
                         continue
-                    open_price = spread_cost
-                    open_comm = 0
-                    if hasattr(order, 'legs'):
-                        try:
-                            open_price = sum([float(getattr(leg, 'filled_avg_price', 0) or 0) for leg in order.legs])
-                            open_comm = getattr(order, 'commission', 0) or 0
-                        except Exception:
-                            pass
-                    post_trade({
+                    # enqueue new trade when open-leg fills
+                    open_data = {
                         'Short Symbol': short_symbol,
                         'Long Symbol': long_symbol,
                         'Ticker': ticker,
@@ -329,13 +334,23 @@ def run_trade_workflow():
                         'Structure': 'Calendar Spread',
                         'Side': 'Long',
                         'Size': quantity,
-                        'Open Date': datetime.now().strftime('%Y-%m-%d'),
-                        'Open Price': open_price,
-                        'Open Comm.': open_comm,
+                        'Open Date': '',
+                        'Open Price': None,
+                        'Open Comm.': None,
                         'Close Date': '',
                         'Close Price': '',
                         'Close Comm.': ''
-                    })
+                    }
+                    def _on_open_filled(filled, data=open_data):
+                        # stamp actual open date on fill
+                        data['Open Date'] = datetime.now().strftime('%Y-%m-%d')
+                        op = sum([float(getattr(leg, 'filled_avg_price', 0) or 0) for leg in filled.legs])
+                        oc = getattr(filled, 'commission', 0) or 0
+                        data['Open Price'] = op
+                        data['Open Comm.'] = oc
+                        trade_fill_queue.put((post_trade, data))
+                    th = monitor_fill_async(client, order, _on_open_filled)
+                    trade_monitor_threads.append(th)
                 else:
                     print(f"Skipping {ticker}: not in correct time window to open BMO trade.")
         except Exception as e:
@@ -397,15 +412,8 @@ def run_trade_workflow():
                     if order is None:
                         print(f"Order placement failed for {ticker}. Skipping posting to Google Sheets.")
                         continue
-                    open_price = spread_cost
-                    open_comm = 0
-                    if hasattr(order, 'legs'):
-                        try:
-                            open_price = sum([float(getattr(leg, 'filled_avg_price', 0) or 0) for leg in order.legs])
-                            open_comm = getattr(order, 'commission', 0) or 0
-                        except Exception:
-                            pass
-                    post_trade({
+                    # enqueue new trade when open-leg fills (AMC)
+                    open_data = {
                         'Short Symbol': short_symbol,
                         'Long Symbol': long_symbol,
                         'Ticker': ticker,
@@ -413,17 +421,32 @@ def run_trade_workflow():
                         'Structure': 'Calendar Spread',
                         'Side': 'Long',
                         'Size': quantity,
-                        'Open Date': datetime.now().strftime('%Y-%m-%d'),
-                        'Open Price': open_price,
-                        'Open Comm.': open_comm,
+                        'Open Date': '',
+                        'Open Price': None,
+                        'Open Comm.': None,
                         'Close Date': '',
                         'Close Price': '',
                         'Close Comm.': ''
-                    })
+                    }
+                    def _on_open_amc_filled(filled, data=open_data):
+                        # stamp actual open date on fill
+                        data['Open Date'] = datetime.now().strftime('%Y-%m-%d')
+                        op = sum([float(getattr(leg, 'filled_avg_price', 0) or 0) for leg in filled.legs])
+                        oc = getattr(filled, 'commission', 0) or 0
+                        data['Open Price'] = op
+                        data['Open Comm.'] = oc
+                        trade_fill_queue.put((post_trade, data))
+                    th = monitor_fill_async(client, order, _on_open_amc_filled)
+                    trade_monitor_threads.append(th)
                 else:
                     print(f"Skipping {ticker}: not in correct time window to open AMC trade.")
         except Exception as e:
             print(f"Error screening/opening AMC trade for {ticker}: {e}")
-
-if __name__ == "__main__":
-    sys.exit(run_trade_workflow())
+    # after all open-trade monitor threads, wait and flush queue
+    for th in trade_monitor_threads:
+        th.join()
+    while not trade_fill_queue.empty():
+        func, pdata = trade_fill_queue.get()
+        func(pdata)
+    if __name__ == "__main__":
+        sys.exit(run_trade_workflow())
