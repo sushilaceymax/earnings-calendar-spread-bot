@@ -207,7 +207,7 @@ def run_trade_workflow():
     client = init_alpaca_client()
     if not client:
         print("Could not initialize Alpaca client. Exiting.")
-        return
+        return 1
     clock = client.get_clock()
     if not getattr(clock, 'is_open', False):
         print(f"Market is closed (next open at {clock.next_open}). Exiting.")
@@ -454,5 +454,5 @@ def run_trade_workflow():
     while not trade_fill_queue.empty():
         func, pdata = trade_fill_queue.get()
         func(pdata)
-    if __name__ == "__main__":
-        sys.exit(run_trade_workflow())
+if __name__ == "__main__":
+    sys.exit(run_trade_workflow())
