@@ -12,6 +12,7 @@ import threading, time
 from alpaca.trading.requests import GetOrderByIdRequest
 from alpaca.trading.enums import OrderStatus
 import math
+from alpaca.common.exceptions import APIError
 
 load_dotenv()
 
@@ -94,11 +95,24 @@ def place_calendar_spread_order(short_symbol, long_symbol, quantity, limit_price
                     break
             except TimeoutError:
                 # cancel unfilled order after timeout for DAY TIF
-                client.cancel_order_by_id(last_order.id)
+                try:
+                    client.cancel_order_by_id(last_order.id)
+                except APIError as e:
+                    # ignore if order is no longer cancelable (status 422)
+                    if e.status_code != 422:
+                        raise
+                    else:
+                        print(f"Order {last_order.id} not cancelable (likely filled); ignoring 422.")
             else:
                 # cancel any remaining unfilled portion after a fill
                 if remaining > 0:
-                    client.cancel_order_by_id(last_order.id)
+                    try:
+                        client.cancel_order_by_id(last_order.id)
+                    except APIError as e:
+                        if e.status_code != 422:
+                            raise
+                        else:
+                            print(f"Order {last_order.id} not cancelable (likely filled); ignoring 422.")
             price += step
         return last_order
     except Exception as e:
@@ -160,11 +174,23 @@ def close_calendar_spread_order(short_symbol, long_symbol, quantity, on_filled=N
                     break
             except TimeoutError:
                 # cancel unfilled order after timeout for DAY TIF
-                client.cancel_order_by_id(last_order.id)
+                try:
+                    client.cancel_order_by_id(last_order.id)
+                except APIError as e:
+                    if e.status_code != 422:
+                        raise
+                    else:
+                        print(f"Order {last_order.id} not cancelable (likely filled); ignoring 422.")
             else:
                 # cancel any remaining unfilled portion after a fill
                 if remaining > 0:
-                    client.cancel_order_by_id(last_order.id)
+                    try:
+                        client.cancel_order_by_id(last_order.id)
+                    except APIError as e:
+                        if e.status_code != 422:
+                            raise
+                        else:
+                            print(f"Order {last_order.id} not cancelable (likely filled); ignoring 422.")
             price -= step
         return last_order
     except Exception as e:
