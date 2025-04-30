@@ -93,7 +93,12 @@ def place_calendar_spread_order(short_symbol, long_symbol, quantity, limit_price
                 if remaining <= 0:
                     break
             except TimeoutError:
-                pass
+                # cancel unfilled order after timeout for DAY TIF
+                client.cancel_order_by_id(last_order.id)
+            else:
+                # cancel any remaining unfilled portion after a fill
+                if remaining > 0:
+                    client.cancel_order_by_id(last_order.id)
             price += step
         return last_order
     except Exception as e:
@@ -154,7 +159,12 @@ def close_calendar_spread_order(short_symbol, long_symbol, quantity, on_filled=N
                 if remaining <= 0:
                     break
             except TimeoutError:
-                pass
+                # cancel unfilled order after timeout for DAY TIF
+                client.cancel_order_by_id(last_order.id)
+            else:
+                # cancel any remaining unfilled portion after a fill
+                if remaining > 0:
+                    client.cancel_order_by_id(last_order.id)
             price -= step
         return last_order
     except Exception as e:
