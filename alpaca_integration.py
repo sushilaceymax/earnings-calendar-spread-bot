@@ -71,18 +71,18 @@ def place_calendar_spread_order(short_symbol, long_symbol, quantity, limit_price
         step = 0.01
         remaining = quantity
         last_order = None
-        # Creeping IOC loop from mid toward ask
+        # Creeping DAY loop from mid toward ask
         while remaining > 0 and price <= max_price:
             lp = round(price, 2)
             req = LimitOrderRequest(
                 order_class=OrderClass.MLEG,
-                time_in_force=TimeInForce.IOC,
+                time_in_force=TimeInForce.DAY,
                 qty=remaining,
                 legs=legs,
                 limit_price=lp
             )
             last_order = client.submit_order(req)
-            print(f"Placed IOC opening at limit ${lp}: {last_order}")
+            print(f"Placed DAY opening at limit ${lp}: {last_order}")
             try:
                 filled = wait_for_fill(client, last_order.id, timeout=5)
                 filled_qty = int(float(getattr(filled, 'filled_qty', 0)))
@@ -132,18 +132,18 @@ def close_calendar_spread_order(short_symbol, long_symbol, quantity, on_filled=N
         step = 0.01
         remaining = quantity
         last_order = None
-        # Creeping IOC loop from mid down toward floor
+        # Creeping DAY loop from mid down toward floor
         while remaining > 0 and price >= min_price:
             lp = round(price, 2)
             req = LimitOrderRequest(
                 order_class=OrderClass.MLEG,
-                time_in_force=TimeInForce.IOC,
+                time_in_force=TimeInForce.DAY,
                 qty=remaining,
                 legs=legs,
                 limit_price=lp
             )
             last_order = client.submit_order(req)
-            print(f"Placed IOC closing at limit ${lp}: {last_order}")
+            print(f"Placed DAY closing at limit ${lp}: {last_order}")
             try:
                 filled = wait_for_fill(client, last_order.id, timeout=5)
                 filled_qty = int(float(getattr(filled, 'filled_qty', 0)))

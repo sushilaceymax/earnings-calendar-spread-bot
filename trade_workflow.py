@@ -233,7 +233,7 @@ def run_trade_workflow():
                         'Close Comm.': cc
                     }
                     trade_fill_queue.put((update_trade, data))
-                # use creeping IOC close with callback
+                # use creeping DAY close with callback
                 order = close_calendar_spread_order(
                     trade.get('Short Symbol'),
                     trade.get('Long Symbol'),
@@ -342,7 +342,7 @@ def run_trade_workflow():
                         data['Open Price'] = op
                         data['Open Comm.'] = oc
                         trade_fill_queue.put((post_trade, data))
-                    # use creeping IOC open with callback
+                    # use creeping DAY open with callback
                     order = place_calendar_spread_order(
                         short_symbol,
                         long_symbol,
@@ -431,7 +431,7 @@ def run_trade_workflow():
                         data['Open Price'] = op
                         data['Open Comm.'] = oc
                         trade_fill_queue.put((post_trade, data))
-                    # use creeping IOC open for AMC with callback
+                    # use creeping DAY open for AMC with callback
                     order = place_calendar_spread_order(
                         short_symbol,
                         long_symbol,
