@@ -69,7 +69,10 @@ def place_calendar_spread_order(short_symbol, long_symbol, quantity, limit_price
         mid_spread = (long_bid + long_ask) / 2 - (short_bid + short_ask) / 2
         max_price = long_ask - short_bid
         price = mid_spread
-        step = 0.01
+        # dynamic crawling step: half the sum of bid-ask spreads on both legs (min $0.01)
+        spread_short = short_ask - short_bid
+        spread_long = long_ask - long_bid
+        step = max((spread_short + spread_long) / 2.0, 0.01)
         remaining = quantity
         last_order = None
         # Creeping DAY loop from mid toward ask
@@ -148,7 +151,10 @@ def close_calendar_spread_order(short_symbol, long_symbol, quantity, on_filled=N
         mid_spread = (long_bid + long_ask) / 2 - (short_bid + short_ask) / 2
         min_price = long_bid - short_ask
         price = mid_spread
-        step = 0.01
+        # dynamic crawling step: half the sum of bid-ask spreads on both legs (min $0.01)
+        spread_short = short_ask - short_bid
+        spread_long = long_ask - long_bid
+        step = max((spread_short + spread_long) / 2.0, 0.01)
         remaining = quantity
         last_order = None
         # Creeping DAY loop from mid down toward floor
