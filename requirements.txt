@@ -1,4 +1,4 @@
-alpaca-py==0.39.3
+alpaca-py
 annotated-types==0.7.0
 beautifulsoup4==4.13.4
 certifi==2025.1.31
@@ -27,4 +27,4 @@ typing_extensions==4.13.2
 tzdata==2025.2
 urllib3==2.4.0
 websockets==15.0.1
-yfinance==0.2.54
+yfinance
