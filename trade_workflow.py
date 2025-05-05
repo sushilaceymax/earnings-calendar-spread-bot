@@ -189,6 +189,8 @@ def calculate_calendar_spread_cost_yahoo(stock, expiry_short, expiry_long, strik
         call_long = chain_long.calls.loc[chain_long.calls['strike'] == strike]
         if call_short.empty or call_long.empty:
             return None
+        print(f"Yahoo quotes for short leg ({expiry_short} {strike}C): Bid={call_short['bid'].iloc[0]}, Ask={call_short['ask'].iloc[0]}")
+        print(f"Yahoo quotes for long leg ({expiry_long} {strike}C): Bid={call_long['bid'].iloc[0]}, Ask={call_long['ask'].iloc[0]}")
         short_mid = (call_short['bid'].iloc[0] + call_short['ask'].iloc[0]) / 2
         long_mid = (call_long['bid'].iloc[0] + call_long['ask'].iloc[0]) / 2
         cost = long_mid - short_mid
@@ -294,12 +296,12 @@ def run_trade_workflow():
                         continue
                     spread_cost = get_option_spread_mid_price(ticker, expiry_short, expiry_long, strike)
                     print(f"Alpaca spread_cost for {ticker}: {spread_cost}")
-                    if not spread_cost or spread_cost <= 0:
+                    if spread_cost is None:
                         print(f"Invalid spread cost for {ticker} using Alpaca (value={spread_cost}). Trying Yahoo...")
                         stock = yf.Ticker(ticker)
                         spread_cost = calculate_calendar_spread_cost_yahoo(stock, expiry_short, expiry_long, strike)
                         print(f"Yahoo spread_cost for {ticker}: {spread_cost}")
-                    if not spread_cost or spread_cost <= 0:
+                    if spread_cost is None:
                         print(f"Invalid spread cost for {ticker} (value={spread_cost}). Skipping.")
                         continue
                     # Fetch OCC symbols from Alpaca chain
@@ -385,11 +387,11 @@ def run_trade_workflow():
                         print(f"Could not determine expiries/strike for {ticker}. Skipping.")
                         continue
                     spread_cost = get_option_spread_mid_price(ticker, expiry_short, expiry_long, strike)
-                    if not spread_cost or spread_cost <= 0:
+                    if spread_cost is None:
                         print(f"Invalid spread cost for {ticker} using Alpaca. Trying Yahoo...")
                         stock = yf.Ticker(ticker)
                         spread_cost = calculate_calendar_spread_cost_yahoo(stock, expiry_short, expiry_long, strike)
-                    if not spread_cost or spread_cost <= 0:
+                    if spread_cost is None:
                         print(f"Invalid spread cost for {ticker}. Skipping.")
                         continue
                     # Fetch OCC symbols from Alpaca chain for AMC

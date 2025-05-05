@@ -66,6 +66,8 @@ def place_calendar_spread_order(short_symbol, long_symbol, quantity, limit_price
         ]
         # Fetch initial quotes for creeping logic
         short_bid, short_ask, long_bid, long_ask = get_spread_quotes(short_symbol, long_symbol)
+        print(f"Initial quotes for {short_symbol}: Bid={short_bid}, Ask={short_ask}")
+        print(f"Initial quotes for {long_symbol}: Bid={long_bid}, Ask={long_ask}")
         mid_spread = (long_bid + long_ask) / 2 - (short_bid + short_ask) / 2
         max_price = long_ask - short_bid
         price = mid_spread
