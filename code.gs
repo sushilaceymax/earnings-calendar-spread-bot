@@ -18,7 +18,11 @@ function doGet(e) {
 }
 
 function doPost(e) {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Earnings"); // Change to your sheet name
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Earnings");
+  // Return early if the sheet is not found
+  if (sheet == null) {
+    return ContentService.createTextOutput("None active").setMimeType(ContentService.MimeType.TEXT);
+  }
   var data = JSON.parse(e.postData.contents);
   var headers = sheet.getDataRange().getValues()[0];
   var row = headers.map(function(header) { return data[header] || ""; });

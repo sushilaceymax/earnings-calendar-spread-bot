@@ -31,97 +31,189 @@ def init_alpaca_client():
         return None
 
 
-def place_calendar_spread_order(short_symbol, long_symbol, quantity, limit_price=None, on_filled=None):
+def place_calendar_spread_order(short_symbol, long_symbol, original_intended_quantity, limit_price=None, on_filled=None, max_total_cost_allowed=None, target_debit_price=None):
     """
     Place a call calendar spread using provided OCC symbols for each leg.
-    Optionally specify a limit_price for the spread order.
+    Optionally specify a limit_price for the spread order (initial target).
+    max_total_cost_allowed caps the total debit for the original_intended_quantity.
+    target_debit_price is the ideal maximum debit per share; chase won't go significantly beyond this.
+    Quantity may be dynamically reduced if price chase makes original quantity too expensive.
     """
     client = init_alpaca_client()
     if not client:
         return None
+    
+    if original_intended_quantity < 1:
+        print(f"Original intended quantity for {short_symbol}/{long_symbol} is < 1. Skipping order.")
+        return None
+
     try:
-        # round the limit_price to two decimal places if provided
+        # This limit_price parameter is the initial target, but the chase starts from mid_spread
+        # We will use it as a reference if provided, but primarily rely on dynamic chasing from mid.
         if limit_price is not None:
-            limit_price = round(limit_price, 2)
-        # simplify leg ratios so they are relatively prime
-        gcd_val = math.gcd(quantity, quantity)
-        ratio_qty_short = quantity // gcd_val
-        ratio_qty_long = quantity // gcd_val
-        if gcd_val > 1:
-            print(f"Simplified leg ratios from {quantity}:{quantity} to {ratio_qty_short}:{ratio_qty_long} using GCD {gcd_val}")
-        # build multi-leg order using provided OCC symbols
-        legs = [
-            OptionLegRequest(
-                symbol=short_symbol,
-                ratio_qty=ratio_qty_short,
-                side=OrderSide.SELL,
-                position_intent=PositionIntent.SELL_TO_OPEN
-            ),
-            OptionLegRequest(
-                symbol=long_symbol,
-                ratio_qty=ratio_qty_long,
-                side=OrderSide.BUY,
-                position_intent=PositionIntent.BUY_TO_OPEN
-            )
-        ]
+            limit_price = round(limit_price, 2) # Store for reference, not directly used to start chase
+
         # Fetch initial quotes for creeping logic
         short_bid, short_ask, long_bid, long_ask = get_spread_quotes(short_symbol, long_symbol)
         print(f"Initial quotes for {short_symbol}: Bid={short_bid}, Ask={short_ask}")
         print(f"Initial quotes for {long_symbol}: Bid={long_bid}, Ask={long_ask}")
-        mid_spread = (long_bid + long_ask) / 2 - (short_bid + short_ask) / 2
-        max_price = long_ask - short_bid
-        price = mid_spread
-        # dynamic crawling step: half the sum of bid-ask spreads on both legs (min $0.01)
+        
+        current_market_mid_spread = (long_bid + long_ask) / 2 - (short_bid + short_ask) / 2
+        # max_price is the absolute worst price (long ask - short bid)
+        market_max_debit = long_ask - short_bid 
+        
+        price_to_chase = current_market_mid_spread # Start chasing from current mid
+        # Dynamic crawling step: half the sum of bid-ask spreads on both legs (min $0.01)
         spread_short = short_ask - short_bid
         spread_long = long_ask - long_bid
-        step = max((spread_short + spread_long) / 2.0, 0.01)
-        remaining = quantity
-        last_order = None
-        # Creeping DAY loop from mid toward ask
-        while remaining > 0 and price <= max_price:
-            lp = round(price, 2)
+        chase_step = max((spread_short + spread_long) / 2.0, 0.01)
+        
+        # Determine the actual maximum price to chase up to.
+        # It should not exceed the market_max_debit (natural ask) 
+        # AND it should not significantly exceed the target_debit_price if provided.
+        effective_max_chase_price = market_max_debit
+        if target_debit_price is not None:
+            # Allow chasing a couple of ticks beyond target_debit_price for fill probability, but not much more.
+            # Example: allow up to target_debit_price + 2*chase_step or a small fixed amount like $0.05
+            # For strictness with "try to not exceed", let's cap it very close to target_debit_price.
+            # We could use a small tolerance, e.g., target_debit_price + 0.01 or target_debit_price + chase_step
+            # Let's use target_debit_price itself as the hard cap for now, as per user req "try to not exceed"
+            effective_max_chase_price = min(market_max_debit, target_debit_price)
+            print(f"Target debit price for {short_symbol}/{long_symbol} is ${target_debit_price:.2f}. Effective max chase price: ${effective_max_chase_price:.2f}")
+        else:
+            print(f"No target_debit_price provided for {short_symbol}/{long_symbol}. Chasing up to market ask of ${market_max_debit:.2f}")
+
+        remaining_overall_quantity = original_intended_quantity
+        total_cost_so_far = 0.0
+        cumulative_filled_order_obj = None # To store the last fill details for the callback
+        filled_something_overall = False
+
+        print(f"Starting trade for {short_symbol}/{long_symbol}: original_qty={original_intended_quantity}, max_total_cost_allowed=${max_total_cost_allowed if max_total_cost_allowed is not None else 'N/A'}")
+
+        # Creeping DAY loop from mid toward effective_max_chase_price
+        while remaining_overall_quantity > 0 and price_to_chase <= effective_max_chase_price:
+            current_limit_price_attempt = round(price_to_chase, 2)
+            
+            # If current_limit_price_attempt is already > target_debit_price (due to initial mid being high), break. 
+            # This check is redundant if effective_max_chase_price is set correctly, but good for safety.
+            if target_debit_price is not None and current_limit_price_attempt > target_debit_price:
+                print(f"Stopping chase for {short_symbol}/{long_symbol}: current limit ${current_limit_price_attempt} exceeds target debit ${target_debit_price}.")
+                break
+
+            affordable_qty_at_this_lp = remaining_overall_quantity # Default to trying to fill all remaining
+            if max_total_cost_allowed is not None:
+                remaining_budget = max_total_cost_allowed - total_cost_so_far
+                if current_limit_price_attempt <= 0: # Avoid division by zero if spread somehow goes free/credit when chasing debit
+                    if remaining_budget < 0: # No budget left even if it's free
+                        affordable_qty_at_this_lp = 0
+                    # else, if it's free/credit and budget is non-negative, can afford all remaining
+                elif remaining_budget > 0:
+                    affordable_qty_at_this_lp = math.floor(remaining_budget / (current_limit_price_attempt * 100))
+                else: # No budget left
+                    affordable_qty_at_this_lp = 0
+
+            qty_for_this_order_attempt = min(remaining_overall_quantity, affordable_qty_at_this_lp)
+
+            if qty_for_this_order_attempt < 1:
+                print(f"Stopping chase for {short_symbol}/{long_symbol}: Cannot afford even 1 share/contract at ${current_limit_price_attempt}. Budget left: ${remaining_budget:.2f}, Qty needed: {remaining_overall_quantity}")
+                break
+            
+            # Simplify leg ratios for this specific order attempt's quantity
+            # In a 1:1 spread, gcd will be qty_for_this_order_attempt, so ratios are 1
+            gcd_val = math.gcd(qty_for_this_order_attempt, qty_for_this_order_attempt)
+            ratio_qty_short = qty_for_this_order_attempt // gcd_val
+            ratio_qty_long = qty_for_this_order_attempt // gcd_val
+
+            legs_for_this_order = [
+                OptionLegRequest(
+                    symbol=short_symbol,
+                    ratio_qty=ratio_qty_short, # Use ratio for the order quantity
+                    side=OrderSide.SELL,
+                    position_intent=PositionIntent.SELL_TO_OPEN
+                ),
+                OptionLegRequest(
+                    symbol=long_symbol,
+                    ratio_qty=ratio_qty_long, # Use ratio for the order quantity
+                    side=OrderSide.BUY,
+                    position_intent=PositionIntent.BUY_TO_OPEN
+                )
+            ]
+
             req = LimitOrderRequest(
                 order_class=OrderClass.MLEG,
                 time_in_force=TimeInForce.DAY,
-                qty=remaining,
-                legs=legs,
-                limit_price=lp
+                qty=qty_for_this_order_attempt, # This is the actual Alpaca quantity for this order
+                legs=legs_for_this_order,
+                limit_price=current_limit_price_attempt
             )
-            last_order = client.submit_order(req)
-            print(f"Placed DAY opening at limit ${lp}: {last_order}")
+            
+            submitted_order_this_attempt = None
             try:
-                filled = wait_for_fill(client, last_order.id, timeout=5)
-                filled_qty = int(float(getattr(filled, 'filled_qty', 0)))
-                remaining -= filled_qty
-                # fire callback for this partial/full fill
-                if on_filled:
-                    on_filled(filled)
-                if remaining <= 0:
-                    break
-            except TimeoutError:
-                # cancel unfilled order after timeout for DAY TIF
-                try:
-                    client.cancel_order_by_id(last_order.id)
-                except APIError as e:
-                    # ignore if order is no longer cancelable (status 422)
-                    if e.status_code != 422:
-                        raise
-                    else:
-                        print(f"Order {last_order.id} not cancelable (likely filled); ignoring 422.")
-            else:
-                # cancel any remaining unfilled portion after a fill
-                if remaining > 0:
+                submitted_order_this_attempt = client.submit_order(req)
+                print(f"Placed DAY opening for {short_symbol}/{long_symbol}: {qty_for_this_order_attempt} qty @ limit ${current_limit_price_attempt}. Order ID: {submitted_order_this_attempt.id}")
+                
+                filled_order_details = wait_for_fill(client, submitted_order_this_attempt.id, timeout=5)
+                filled_qty_this_order = int(float(getattr(filled_order_details, 'filled_qty', 0) or 0))
+                
+                if filled_qty_this_order > 0:
+                    filled_something_overall = True
+                    avg_fill_price_this_order = float(getattr(filled_order_details, 'filled_avg_price', 0) or 0)
+                    cost_this_fill = avg_fill_price_this_order * filled_qty_this_order * 100
+                    total_cost_so_far += cost_this_fill
+                    remaining_overall_quantity -= filled_qty_this_order
+                    cumulative_filled_order_obj = filled_order_details # Update with latest fill details
+                    
+                    print(f"Order {submitted_order_this_attempt.id} for {short_symbol}/{long_symbol}: Filled {filled_qty_this_order} at ${avg_fill_price_this_order}. Remaining overall: {remaining_overall_quantity}. Total cost so far: ${total_cost_so_far:.2f}")
+
+                    if on_filled and filled_qty_this_order == qty_for_this_order_attempt: # Callback if this attempt fully filled
+                         # The callback expects the context of the *entire trade attempt* not just one slice.
+                         # For simplicity, we'll call it per filled order that was fully filled for its attempt.
+                         # A more complex callback might want cumulative details.
+                        on_filled(filled_order_details) 
+
+                if remaining_overall_quantity <= 0:
+                    print(f"Entire trade for {short_symbol}/{long_symbol} ({original_intended_quantity} contracts) filled.")
+                    break # Exit chase loop
+                
+                # If the order submitted was partially filled (filled_qty_this_order < qty_for_this_order_attempt)
+                # and not fully cancelled by wait_for_fill, try to cancel the remainder before chasing at a new price.
+                if filled_qty_this_order < qty_for_this_order_attempt and filled_order_details.status != OrderStatus.CANCELED:
                     try:
-                        client.cancel_order_by_id(last_order.id)
+                        client.cancel_order_by_id(submitted_order_this_attempt.id)
+                        print(f"Cancelled remaining part of order {submitted_order_this_attempt.id} for {short_symbol}/{long_symbol} after partial fill.")
                     except APIError as e:
-                        if e.status_code != 422:
-                            raise
-                        else:
-                            print(f"Order {last_order.id} not cancelable (likely filled); ignoring 422.")
-            price += step
-        return last_order
+                        if e.status_code != 422: raise
+                        else: print(f"Order {submitted_order_this_attempt.id} not cancelable (likely fully filled/expired); ignoring 422.")
+            
+            except TimeoutError:
+                print(f"Order {submitted_order_this_attempt.id if submitted_order_this_attempt else 'N/A'} ({qty_for_this_order_attempt} qty @ ${current_limit_price_attempt}) for {short_symbol}/{long_symbol} timed out (5s). Cancelling if exists.")
+                if submitted_order_this_attempt:
+                    try:
+                        client.cancel_order_by_id(submitted_order_this_attempt.id)
+                    except APIError as e:
+                        if e.status_code != 422: raise
+                        else: print(f"Order {submitted_order_this_attempt.id} not cancelable on timeout (likely filled/expired); ignoring 422.")
+            except Exception as e_order_submission_loop:
+                print(f"Error during order submission/fill loop for {short_symbol}/{long_symbol}: {e_order_submission_loop}")
+                # Decide if we should break or continue; for now, let's increment price and retry
+                # unless it's a critical API error, but most are caught by the outer try/except.
+            
+            price_to_chase += chase_step
+        
+        if remaining_overall_quantity > 0 and filled_something_overall:
+             print(f"Partially filled trade for {short_symbol}/{long_symbol}. Filled {original_intended_quantity - remaining_overall_quantity} out of {original_intended_quantity}. Cost: ${total_cost_so_far:.2f}")
+        elif not filled_something_overall:
+            print(f"Could not fill any quantity for {short_symbol}/{long_symbol} within price limits (last attempt price: ${round(price_to_chase-chase_step,2)}, effective max chase: ${effective_max_chase_price:.2f}).")
+        
+        # Return the details of the last successful fill if any, or None
+        # The `on_filled` callback would have been called per successful complete slice.
+        # For a final representation, cumulative_filled_order_obj might be useful if the caller expects one Order object. 
+        # However, for posting to sheets, each slice might be posted via its own callback firing.
+        # Returning the last one for now.
+        return cumulative_filled_order_obj 
+
     except Exception as e:
-        print(f"Error placing calendar spread order: {e}")
+        print(f"Error placing calendar spread order for {short_symbol}/{long_symbol}: {e}")
         return None
 
 

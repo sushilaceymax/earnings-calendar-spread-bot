@@ -225,7 +225,7 @@ def run_trade_workflow():
                 print(f"Closing trade for {trade['Ticker']}...")
                 # enqueue update when close-leg fills
                 def _on_close_filled(filled, t=trade):
-                    cp = sum([float(leg.filled_avg_price or 0) for leg in filled.legs])
+                    cp = float(getattr(filled, 'filled_avg_price', 0) or 0)
                     cc = getattr(filled, 'commission', 0) or 0
                     data = {
                         'Ticker': t['Ticker'],
@@ -320,43 +320,49 @@ def run_trade_workflow():
                         continue
                     implied_move = rec.get('expected_move', '')
                     print(f"Opening BMO trade for {ticker}: {quantity}x {expiry_short}/{expiry_long} @ {strike}, cost/spread: ${spread_cost:.2f}, Kelly allocation: ${max_allocation:.2f}, Implied Move: {implied_move}")
-                    # enqueue new trade when open-leg fills
-                    open_data = {
+                    
+                    base_open_data_bmo = { # Renamed to indicate it's a base template
                         'Short Symbol': short_symbol,
                         'Long Symbol': long_symbol,
                         'Ticker': ticker,
                         'Implied Move': implied_move,
                         'Structure': 'Calendar Spread',
                         'Side': 'Long',
-                        'Size': quantity,
-                        'Open Date': '',
-                        'Open Price': None,
-                        'Open Comm.': None,
+                        # Size, Open Date, Open Price, Open Comm. will be set per fill
                         'Close Date': '',
                         'Close Price': '',
                         'Close Comm.': ''
                     }
-                    def _on_open_filled(filled, data=open_data):
-                        # stamp actual open date on fill
-                        data['Open Date'] = datetime.now().strftime('%Y-%m-%d')
-                        op = sum([float(getattr(leg, 'filled_avg_price', 0) or 0) for leg in filled.legs])
-                        oc = getattr(filled, 'commission', 0) or 0
-                        data['Open Price'] = op
-                        data['Open Comm.'] = oc
-                        trade_fill_queue.put((post_trade, data))
+
+                    def _on_open_filled(filled, base_data=base_open_data_bmo): # Pass base_data
+                        # Make a copy for this specific fill to avoid modifying shared state
+                        data_for_this_fill = base_data.copy()
+                        
+                        data_for_this_fill['Open Date'] = datetime.now().strftime('%Y-%m-%d')
+                        # Price and Qty are from the specific filled slice
+                        data_for_this_fill['Open Price'] = float(getattr(filled, 'filled_avg_price', 0) or 0)
+                        data_for_this_fill['Size'] = int(float(getattr(filled, 'filled_qty', 0) or 0))
+                        data_for_this_fill['Open Comm.'] = getattr(filled, 'commission', 0) or 0
+                        
+                        if data_for_this_fill['Size'] > 0: # Only post if something actually filled for this slice
+                            trade_fill_queue.put((post_trade, data_for_this_fill))
+                        else:
+                            print(f"Warning: _on_open_filled called for {base_data.get('Ticker')} but filled_qty is 0. Order ID: {getattr(filled, 'id', 'N/A')}")
+
                     # use creeping DAY open with callback
-                    order = place_calendar_spread_order(
+                    # No longer need external monitor_fill_async for opening trades
+                    order_status = place_calendar_spread_order(
                         short_symbol,
                         long_symbol,
-                        quantity,
-                        limit_price=limit_price,
-                        on_filled=_on_open_filled
+                        quantity, # This is the original_intended_quantity
+                        limit_price=limit_price, # Initial target, will be refined by target_debit_price logic
+                        on_filled=_on_open_filled,
+                        max_total_cost_allowed=max_allocation,
+                        target_debit_price=spread_cost # New parameter: do not exceed this initial cost much
                     )
-                    if order is None:
-                        print(f"Order placement failed for {ticker}. Skipping posting to Google Sheets.")
-                        continue
-                    th = monitor_fill_async(client, order, _on_open_filled)
-                    trade_monitor_threads.append(th)
+                    if order_status is None: # place_calendar_spread_order now returns cumulative_filled_order_obj or None
+                        print(f"Order placement process did not result in a confirmed fill for {ticker}. Skipping further processing for this attempt.")
+                        # Continue to next ticker, no thread to append
                 else:
                     print(f"Skipping {ticker}: not in correct time window to open BMO trade.")
         except Exception as e:
@@ -409,43 +415,47 @@ def run_trade_workflow():
                         continue
                     implied_move = rec.get('expected_move', '')
                     print(f"Opening AMC trade for {ticker}: {quantity}x {expiry_short}/{expiry_long} @ {strike}, cost/spread: ${spread_cost:.2f}, Kelly allocation: ${max_allocation:.2f}, Implied Move: {implied_move}")
-                    # enqueue new trade when open-leg fills (AMC)
-                    open_data = {
+                    
+                    base_open_data_amc = { # Renamed for AMC
                         'Short Symbol': short_symbol,
                         'Long Symbol': long_symbol,
                         'Ticker': ticker,
                         'Implied Move': implied_move,
                         'Structure': 'Calendar Spread',
                         'Side': 'Long',
-                        'Size': quantity,
-                        'Open Date': '',
-                        'Open Price': None,
-                        'Open Comm.': None,
+                        # Size, Open Date, Open Price, Open Comm. will be set per fill
                         'Close Date': '',
                         'Close Price': '',
                         'Close Comm.': ''
                     }
-                    def _on_open_amc_filled(filled, data=open_data):
-                        # stamp actual open date on fill
-                        data['Open Date'] = datetime.now().strftime('%Y-%m-%d')
-                        op = sum([float(getattr(leg, 'filled_avg_price', 0) or 0) for leg in filled.legs])
-                        oc = getattr(filled, 'commission', 0) or 0
-                        data['Open Price'] = op
-                        data['Open Comm.'] = oc
-                        trade_fill_queue.put((post_trade, data))
-                    # use creeping DAY open for AMC with callback
-                    order = place_calendar_spread_order(
+
+                    def _on_open_amc_filled(filled, base_data=base_open_data_amc): # Pass base_data
+                        # Make a copy for this specific fill
+                        data_for_this_fill = base_data.copy()
+                        
+                        data_for_this_fill['Open Date'] = datetime.now().strftime('%Y-%m-%d')
+                        data_for_this_fill['Open Price'] = float(getattr(filled, 'filled_avg_price', 0) or 0)
+                        data_for_this_fill['Size'] = int(float(getattr(filled, 'filled_qty', 0) or 0))
+                        data_for_this_fill['Open Comm.'] = getattr(filled, 'commission', 0) or 0
+
+                        if data_for_this_fill['Size'] > 0: # Only post if something actually filled
+                            trade_fill_queue.put((post_trade, data_for_this_fill))
+                        else:
+                            print(f"Warning: _on_open_amc_filled called for {base_data.get('Ticker')} but filled_qty is 0. Order ID: {getattr(filled, 'id', 'N/A')}")
+                    
+                    # No longer need external monitor_fill_async for opening trades
+                    order_status = place_calendar_spread_order(
                         short_symbol,
                         long_symbol,
-                        quantity,
+                        quantity, # original_intended_quantity
                         limit_price=limit_price,
-                        on_filled=_on_open_amc_filled
+                        on_filled=_on_open_amc_filled,
+                        max_total_cost_allowed=max_allocation,
+                        target_debit_price=spread_cost # New parameter
                     )
-                    if order is None:
-                        print(f"Order placement failed for {ticker}. Skipping posting to Google Sheets.")
-                        continue
-                    th = monitor_fill_async(client, order, _on_open_amc_filled)
-                    trade_monitor_threads.append(th)
+                    if order_status is None:
+                        print(f"Order placement process did not result in a confirmed fill for {ticker}. Skipping further processing for this attempt.")
+                        # Continue to next ticker
                 else:
                     print(f"Skipping {ticker}: not in correct time window to open AMC trade.")
         except Exception as e:
