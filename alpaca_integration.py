@@ -444,6 +444,8 @@ def wait_for_fill(client, order_id, timeout=5, interval=1):
         ord = client.get_order_by_id(order_id)
         # Accept partial fills immediately
         if float(getattr(ord, 'filled_qty', 0) or 0) > 0:
+            filled_qty_val = float(getattr(ord, 'filled_qty', 0) or 0)
+            print(f"wait_for_fill: Order {order_id} filled with qty {filled_qty_val}")
             return ord
         time.sleep(interval)
     raise TimeoutError(f"Order {order_id} not filled in {timeout}s")
