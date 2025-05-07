@@ -69,19 +69,15 @@ def place_calendar_spread_order(short_symbol, long_symbol, original_intended_qua
         chase_step = max((spread_short + spread_long) / 2.0, 0.01)
         
         # Determine the actual maximum price to chase up to.
-        # It should not exceed the market_max_debit (natural ask) 
-        # AND it should not significantly exceed the target_debit_price if provided.
-        effective_max_chase_price = market_max_debit
+        # The chase will now go up to the natural market ask (market_max_debit).
+        # target_debit_price (ideal entry from initial mid) is for logging/reference here.
+        effective_max_chase_price = market_max_debit 
         if target_debit_price is not None:
-            # Allow chasing a couple of ticks beyond target_debit_price for fill probability, but not much more.
-            # Example: allow up to target_debit_price + 2*chase_step or a small fixed amount like $0.05
-            # For strictness with "try to not exceed", let's cap it very close to target_debit_price.
-            # We could use a small tolerance, e.g., target_debit_price + 0.01 or target_debit_price + chase_step
-            # Let's use target_debit_price itself as the hard cap for now, as per user req "try to not exceed"
-            effective_max_chase_price = min(market_max_debit, target_debit_price)
-            print(f"Target debit price for {short_symbol}/{long_symbol} is ${target_debit_price:.2f}. Effective max chase price: ${effective_max_chase_price:.2f}")
+            # Log both the ideal target and the actual chase limit (market ask)
+            print(f"Ideal target debit price for {short_symbol}/{long_symbol} is ${target_debit_price:.2f}. Will chase up to market ask (effective max chase price): ${effective_max_chase_price:.2f}")
         else:
-            print(f"No target_debit_price provided for {short_symbol}/{long_symbol}. Chasing up to market ask of ${market_max_debit:.2f}")
+            # This case might not be hit if trade_workflow always provides target_debit_price
+            print(f"No ideal target_debit_price provided. Chasing up to market ask (effective max chase price): ${effective_max_chase_price:.2f}")
 
         remaining_overall_quantity = original_intended_quantity
         total_cost_so_far = 0.0
@@ -94,12 +90,6 @@ def place_calendar_spread_order(short_symbol, long_symbol, original_intended_qua
         while remaining_overall_quantity > 0 and price_to_chase <= effective_max_chase_price:
             current_limit_price_attempt = round(price_to_chase, 2)
             
-            # If current_limit_price_attempt is already > target_debit_price (due to initial mid being high), break. 
-            # This check is redundant if effective_max_chase_price is set correctly, but good for safety.
-            if target_debit_price is not None and current_limit_price_attempt > target_debit_price:
-                print(f"Stopping chase for {short_symbol}/{long_symbol}: current limit ${current_limit_price_attempt} exceeds target debit ${target_debit_price}.")
-                break
-
             affordable_qty_at_this_lp = remaining_overall_quantity # Default to trying to fill all remaining
             if max_total_cost_allowed is not None:
                 remaining_budget = max_total_cost_allowed - total_cost_so_far

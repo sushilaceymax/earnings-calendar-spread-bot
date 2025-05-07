@@ -304,6 +304,12 @@ def run_trade_workflow():
                     if spread_cost is None:
                         print(f"Invalid spread cost for {ticker} (value={spread_cost}). Skipping.")
                         continue
+                    
+                    # Add check for non-positive spread_cost before calculating quantity
+                    if spread_cost <= 0:
+                        print(f"Spread cost for {ticker} is ${spread_cost:.2f} (non-positive). Skipping.")
+                        continue
+
                     # Fetch OCC symbols from Alpaca chain
                     chain = get_alpaca_option_chain(ticker)
                     short_contract = chain.get(expiry_short, {}).get(strike, {}).get('call')
@@ -400,6 +406,12 @@ def run_trade_workflow():
                     if spread_cost is None:
                         print(f"Invalid spread cost for {ticker}. Skipping.")
                         continue
+                    
+                    # Add check for non-positive spread_cost before calculating quantity
+                    if spread_cost <= 0:
+                        print(f"Spread cost for {ticker} is ${spread_cost:.2f} (non-positive). Skipping.")
+                        continue
+
                     # Fetch OCC symbols from Alpaca chain for AMC
                     chain = get_alpaca_option_chain(ticker)
                     short_contract = chain.get(expiry_short, {}).get(strike, {}).get('call')
