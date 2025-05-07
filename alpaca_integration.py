@@ -229,13 +229,13 @@ def close_calendar_spread_order(short_symbol, long_symbol, quantity, on_filled=N
         legs = [
             OptionLegRequest(
                 symbol=short_symbol,
-                ratio_qty=quantity,
+                ratio_qty=1,
                 side=OrderSide.BUY,
                 position_intent=PositionIntent.BUY_TO_CLOSE
             ),
             OptionLegRequest(
                 symbol=long_symbol,
-                ratio_qty=quantity,
+                ratio_qty=1,
                 side=OrderSide.SELL,
                 position_intent=PositionIntent.SELL_TO_CLOSE
             )
