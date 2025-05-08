@@ -32,6 +32,7 @@ def init_db():
            "Implied Move" TEXT,
            "Structure" TEXT,
            "Side" TEXT,
+           "When" TEXT,
            "Size" INTEGER,
            "Short Symbol" TEXT,
            "Long Symbol" TEXT,
@@ -43,6 +44,11 @@ def init_db():
            "Close Comm." REAL
         )'''
     )
+    # Migrate: add 'When' column if missing
+    cursor.execute("PRAGMA table_info(trades)")
+    cols = [row[1] for row in cursor.fetchall()]
+    if "When" not in cols:
+        cursor.execute('ALTER TABLE trades ADD COLUMN "When" TEXT')
     conn.commit()
     conn.close()
 
@@ -59,13 +65,14 @@ def post_trade(trade_data):
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
             cur.execute(
-                """INSERT INTO trades ("Ticker","Implied Move","Structure","Side","Size","Short Symbol","Long Symbol","Open Date","Open Price","Open Comm.","Close Date","Close Price","Close Comm.")
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                """INSERT INTO trades ("Ticker","Implied Move","Structure","Side","When","Size","Short Symbol","Long Symbol","Open Date","Open Price","Open Comm.","Close Date","Close Price","Close Comm.")
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     trade_data.get('Ticker'),
                     trade_data.get('Implied Move'),
                     trade_data.get('Structure'),
                     trade_data.get('Side'),
+                    trade_data.get('When'),
                     trade_data.get('Size'),
                     trade_data.get('Short Symbol'),
                     trade_data.get('Long Symbol'),
@@ -153,7 +160,8 @@ def is_time_to_close(earnings_date, when):
         close_dt = datetime.combine(earnings_date, open_time, tzinfo=eastern) + timedelta(minutes=15)
     else:  # AMC
         close_dt = datetime.combine(earnings_date + timedelta(days=1), open_time, tzinfo=eastern) + timedelta(minutes=15)
-    return close_dt <= now < close_dt + timedelta(minutes=30)
+    # Close any due or overdue trades after close_dt (all trades close in the morning)
+    return now >= close_dt
 
 def select_expiries_and_strike_yahoo(stock, earnings_date):
     """
@@ -219,8 +227,13 @@ def run_trade_workflow():
     open_trades = get_open_trades()
     for trade in open_trades:
         try:
-            earnings_date = datetime.strptime(trade['Open Date'], "%Y-%m-%d").date()
-            when = trade.get('When', 'AMC')  # If you have a 'When' column, else default
+            open_date = datetime.strptime(trade['Open Date'], "%Y-%m-%d").date()
+            when = trade.get('When', 'AMC')
+            # Determine actual earnings date: BMO trades have open_date = day before earnings
+            if when == 'BMO':
+                earnings_date = open_date + timedelta(days=1)
+            else:
+                earnings_date = open_date
             if is_time_to_close(earnings_date, when):
                 print(f"Closing trade for {trade['Ticker']}...")
                 # enqueue update when close-leg fills
@@ -334,6 +347,7 @@ def run_trade_workflow():
                         'Implied Move': implied_move,
                         'Structure': 'Calendar Spread',
                         'Side': 'Long',
+                        'When': when_norm,
                         # Size, Open Date, Open Price, Open Comm. will be set per fill
                         'Close Date': '',
                         'Close Price': '',
@@ -435,6 +449,7 @@ def run_trade_workflow():
                         'Implied Move': implied_move,
                         'Structure': 'Calendar Spread',
                         'Side': 'Long',
+                        'When': when_norm,
                         # Size, Open Date, Open Price, Open Comm. will be set per fill
                         'Close Date': '',
                         'Close Price': '',
