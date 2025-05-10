@@ -142,7 +142,7 @@ def place_calendar_spread_order(short_symbol, long_symbol, original_intended_qua
                 submitted_order_this_attempt = client.submit_order(req)
                 print(f"Placed DAY opening for {short_symbol}/{long_symbol}: {qty_for_this_order_attempt} qty @ limit ${current_limit_price_attempt}. Order ID: {submitted_order_this_attempt.id}")
                 
-                filled_order_details = wait_for_fill(client, submitted_order_this_attempt.id, timeout=5)
+                filled_order_details = wait_for_fill(client, submitted_order_this_attempt.id, timeout=30)
                 filled_qty_this_order = int(float(getattr(filled_order_details, 'filled_qty', 0) or 0))
                 
                 if filled_qty_this_order > 0:
@@ -176,7 +176,7 @@ def place_calendar_spread_order(short_symbol, long_symbol, original_intended_qua
                         else: print(f"Order {submitted_order_this_attempt.id} not cancelable (likely fully filled/expired); ignoring 422.")
             
             except TimeoutError:
-                print(f"Order {submitted_order_this_attempt.id if submitted_order_this_attempt else 'N/A'} ({qty_for_this_order_attempt} qty @ ${current_limit_price_attempt}) for {short_symbol}/{long_symbol} timed out (5s). Cancelling if exists.")
+                print(f"Order {submitted_order_this_attempt.id if submitted_order_this_attempt else 'N/A'} ({qty_for_this_order_attempt} qty @ ${current_limit_price_attempt}) for {short_symbol}/{long_symbol} timed out (30s). Cancelling if exists.")
                 if submitted_order_this_attempt:
                     try:
                         client.cancel_order_by_id(submitted_order_this_attempt.id)
@@ -254,7 +254,7 @@ def close_calendar_spread_order(short_symbol, long_symbol, quantity, on_filled=N
             last_order = client.submit_order(req)
             print(f"Placed DAY closing at limit ${lp}: {last_order}")
             try:
-                filled = wait_for_fill(client, last_order.id, timeout=5)
+                filled = wait_for_fill(client, last_order.id, timeout=30)
                 filled_qty = int(float(getattr(filled, 'filled_qty', 0)))
                 remaining -= filled_qty
                 # fire callback for this partial/full fill
@@ -425,7 +425,7 @@ def get_option_spread_mid_price(symbol, expiry_short, expiry_long, strike, callp
         return None
 
 
-def wait_for_fill(client, order_id, timeout=5, interval=1):
+def wait_for_fill(client, order_id, timeout=30, interval=1):
     """
     Poll an order until it is fully filled or timeout expires. Returns the filled order.
     """
@@ -441,7 +441,7 @@ def wait_for_fill(client, order_id, timeout=5, interval=1):
     raise TimeoutError(f"Order {order_id} not filled in {timeout}s")
 
 
-def monitor_fill_async(client, order, on_filled, timeout=5, interval=1):
+def monitor_fill_async(client, order, on_filled, timeout=30, interval=1):
     """
     Start a daemon thread to wait for fill and call on_filled callback when done.
     """
