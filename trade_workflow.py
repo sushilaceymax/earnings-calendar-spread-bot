@@ -12,6 +12,9 @@ import sys
 import sqlite3
 import queue
 
+# Constants
+PROFIT_ADJUSTMENT_FACTOR = 0.5  # Only 50% of the profits are considered for adjustment
+
 # queue for filled trades and tracking threads
 trade_fill_queue = queue.Queue()
 trade_monitor_threads = []
@@ -58,12 +61,14 @@ def get_total_profit():
     """Calculate the total profit from all closed trades.
     
     Returns:
-        float: Total profit from all closed trades. Returns 0 if no closed trades or negative profit.
+        float: Total profit from all closed trades, adjusted by PROFIT_ADJUSTMENT_FACTOR.
+        Returns 0 if no closed trades or negative profit.
         
     Note:
         - Size represents the number of option contracts in the trade
         - Each contract represents 100 shares, hence the *100 multiplier
         - Open Comm. and Close Comm. are the commission costs from Alpaca for opening/closing trades
+        - The final profit is adjusted by PROFIT_ADJUSTMENT_FACTOR (e.g., 0.5 means 50% of profit)
     """
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -79,10 +84,11 @@ def get_total_profit():
         result = cursor.fetchone()[0]
         conn.close()
         
-        # Return profit if it exists and is positive, otherwise return 0
+        # Return adjusted profit if it exists and is positive, otherwise return 0
         if result is not None and result > 0:
-            print(f"Total profit from closed trades: ${result:.2f}")
-            return result
+            adjusted_profit = result * PROFIT_ADJUSTMENT_FACTOR
+            print(f"Total profit from closed trades: ${result:.2f}, Adjusted profit (× {PROFIT_ADJUSTMENT_FACTOR}): ${adjusted_profit:.2f}")
+            return adjusted_profit
         else:
             print("No positive profit found, defaulting to 0")
             return 0
