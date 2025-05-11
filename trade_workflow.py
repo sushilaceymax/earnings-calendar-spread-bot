@@ -54,6 +54,42 @@ def init_db():
 
 init_db()
 
+def get_total_profit():
+    """Calculate the total profit from all closed trades.
+    
+    Returns:
+        float: Total profit from all closed trades. Returns 0 if no closed trades or negative profit.
+        
+    Note:
+        - Size represents the number of option contracts in the trade
+        - Each contract represents 100 shares, hence the *100 multiplier
+        - Open Comm. and Close Comm. are the commission costs from Alpaca for opening/closing trades
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        # Calculate profit for each closed trade: (ClosePrice - OpenPrice) * Size * 100 - OpenComm - CloseComm
+        cursor.execute("""
+            SELECT SUM(
+                ("Close Price" - "Open Price") * "Size" * 100 - "Open Comm." - "Close Comm."
+            ) as TotalProfit
+            FROM trades
+            WHERE "Close Date" IS NOT NULL AND "Close Date" != ''
+        """)
+        result = cursor.fetchone()[0]
+        conn.close()
+        
+        # Return profit if it exists and is positive, otherwise return 0
+        if result is not None and result > 0:
+            print(f"Total profit from closed trades: ${result:.2f}")
+            return result
+        else:
+            print("No positive profit found, defaulting to 0")
+            return 0
+    except Exception as e:
+        print(f"Error calculating total profit: {e}")
+        return 0
+
 def post_trade(trade_data):
     """POST a new trade to the Google Apps Script endpoint."""
     try:
@@ -280,6 +316,12 @@ def run_trade_workflow():
     if not portfolio_value:
         print("Could not fetch portfolio value. Skipping trade opening.")
         return
+    
+    # Calculate total profit and subtract it from portfolio value to determine available capital
+    total_profit = get_total_profit()
+    adjusted_portfolio_value = portfolio_value - total_profit
+    print(f"Portfolio value: ${portfolio_value:.2f}, Adjusted for profit: ${adjusted_portfolio_value:.2f}")
+    
     # Open BMO trades for tomorrow's earnings (open the day before)
     for ticker_info in tomorrows_earnings:
         ticker = ticker_info['act_symbol']
@@ -332,7 +374,7 @@ def run_trade_workflow():
                     # Fetch live mid price for limit order
                     limit_price = get_option_spread_mid_price(ticker, expiry_short, expiry_long, strike)
                     kelly_fraction = 0.10
-                    max_allocation = portfolio_value * kelly_fraction
+                    max_allocation = adjusted_portfolio_value * kelly_fraction
                     quantity = int(max_allocation // (spread_cost * 100))  # 1 contract = 100 shares
                     if quantity < 1:
                         print(f"Kelly sizing yields 0 contracts for {ticker}. Skipping.")
@@ -434,7 +476,7 @@ def run_trade_workflow():
                     long_symbol = getattr(long_contract, 'symbol', None)
                     limit_price = get_option_spread_mid_price(ticker, expiry_short, expiry_long, strike)
                     kelly_fraction = 0.10
-                    max_allocation = portfolio_value * kelly_fraction
+                    max_allocation = adjusted_portfolio_value * kelly_fraction
                     quantity = int(max_allocation // (spread_cost * 100))  # 1 contract = 100 shares
                     if quantity < 1:
                         print(f"Kelly sizing yields 0 contracts for {ticker}. Skipping.")
