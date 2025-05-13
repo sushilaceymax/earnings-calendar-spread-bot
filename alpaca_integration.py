@@ -254,7 +254,7 @@ def close_calendar_spread_order(short_symbol, long_symbol, quantity, on_filled=N
             last_order = client.submit_order(req)
             print(f"Placed DAY closing at limit ${lp}: {last_order}")
             try:
-                filled = wait_for_fill(client, last_order.id, timeout=30)
+                filled = wait_for_fill(client, last_order.id, timeout=60)
                 filled_qty = int(float(getattr(filled, 'filled_qty', 0)))
                 remaining -= filled_qty
                 # fire callback for this partial/full fill
