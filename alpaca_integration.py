@@ -69,9 +69,9 @@ def place_calendar_spread_order(short_symbol, long_symbol, original_intended_qua
         chase_step = max((spread_short + spread_long) / 2.0, 0.01)
         
         # Determine the actual maximum price to chase up to.
-        # The chase will now go up to the natural market ask (market_max_debit).
         # target_debit_price (ideal entry from initial mid) is for logging/reference here.
-        effective_max_chase_price = market_max_debit 
+        # previously the market_max_debit was used as the effective max chase price
+        effective_max_chase_price = long_ask
         if target_debit_price is not None:
             # Log both the ideal target and the actual chase limit (market ask)
             print(f"Ideal target debit price for {short_symbol}/{long_symbol} is ${target_debit_price:.2f}. Will chase up to market ask (effective max chase price): ${effective_max_chase_price:.2f}")
