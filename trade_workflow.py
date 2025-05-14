@@ -154,7 +154,7 @@ def get_open_trades():
 def update_trade(trade_data):
     """PUT/POST to update a trade as closed in the Google Apps Script endpoint."""
     try:
-        r = requests.put(GOOGLE_SCRIPT_URL, json=trade_data)
+        r = requests.post(GOOGLE_SCRIPT_URL, json=trade_data)
         r.raise_for_status()
         print(f"Updated trade: {trade_data} -> {r.text}")
         # update SQLite
@@ -379,7 +379,7 @@ def run_trade_workflow():
                     long_symbol = getattr(long_contract, 'symbol', None)
                     # Fetch live mid price for limit order
                     limit_price = get_option_spread_mid_price(ticker, expiry_short, expiry_long, strike)
-                    kelly_fraction = 0.10
+                    kelly_fraction = 0.06
                     max_allocation = adjusted_portfolio_value * kelly_fraction
                     quantity = int(max_allocation // (spread_cost * 100))  # 1 contract = 100 shares
                     if quantity < 1:
@@ -481,7 +481,7 @@ def run_trade_workflow():
                     short_symbol = getattr(short_contract, 'symbol', None)
                     long_symbol = getattr(long_contract, 'symbol', None)
                     limit_price = get_option_spread_mid_price(ticker, expiry_short, expiry_long, strike)
-                    kelly_fraction = 0.10
+                    kelly_fraction = 0.06
                     max_allocation = adjusted_portfolio_value * kelly_fraction
                     quantity = int(max_allocation // (spread_cost * 100))  # 1 contract = 100 shares
                     if quantity < 1:
