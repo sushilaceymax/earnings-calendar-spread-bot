@@ -154,9 +154,6 @@ def get_open_trades():
 def update_trade(trade_data):
     """PUT/POST to update a trade as closed in the Google Apps Script endpoint."""
     try:
-        r = requests.post(GOOGLE_SCRIPT_URL, json=trade_data)
-        r.raise_for_status()
-        print(f"Updated trade: {trade_data} -> {r.text}")
         # update SQLite
         try:
             conn = sqlite3.connect(DB_PATH)
@@ -179,6 +176,10 @@ def update_trade(trade_data):
             conn.close()
         except Exception as db_e:
             print(f"Error updating trade in SQLite: {db_e}")
+        
+        r = requests.post(GOOGLE_SCRIPT_URL, json=trade_data)
+        r.raise_for_status()
+        print(f"Updated trade: {trade_data} -> {r.text}")
         return r.text
     except Exception as e:
         print(f"Error updating trade: {e}")
