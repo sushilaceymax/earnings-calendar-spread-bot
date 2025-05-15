@@ -233,7 +233,8 @@ def close_calendar_spread_order(short_symbol, long_symbol, quantity, on_filled=N
         # Fetch quotes for closing creeping logic
         short_bid, short_ask, long_bid, long_ask = get_spread_quotes(short_symbol, long_symbol)
         mid_spread = (long_bid + long_ask) / 2 - (short_bid + short_ask) / 2
-        min_price = long_bid - short_ask
+        # previously used the natural market bid (long_bid - short_ask) as floor
+        min_price = long_bid
         price = mid_spread
         # dynamic crawling step: half the sum of bid-ask spreads on both legs (min $0.01)
         spread_short = short_ask - short_bid

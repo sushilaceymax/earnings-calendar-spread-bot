@@ -10,7 +10,7 @@ Always consult a professional financial advisor before making any investment dec
 
 import requests
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from scipy.interpolate import interp1d
 import numpy as np
 import threading
@@ -21,6 +21,11 @@ import argparse
 from alpaca_integration import get_alpaca_option_chain, init_alpaca_client
 from alpaca.data.historical.option import OptionHistoricalDataClient
 from alpaca.data.requests import OptionLatestQuoteRequest, OptionSnapshotRequest
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockLatestBarRequest, StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
+from alpaca.data.enums import DataFeed
+import pandas as pd
 
 # Load environment variables from .env file
 load_dotenv()
@@ -123,27 +128,30 @@ def compute_recommendation(ticker):
         alpaca_success = False
         if option_chain:
             try:
+                print(f"[{ticker}] Attempting to use Alpaca option chain data")
                 exp_dates = sorted(option_chain.keys())
                 # apply 45-day window and drop 0DTE using filter_dates()
                 try:
                     exp_dates_filtered = filter_dates(exp_dates)
                 except ValueError:
+                    print(f"[{ticker}] Not enough option data from Alpaca")
                     return "Error: Not enough option data."
                 underlying_price = None
                 try:
-                    from alpaca.data.historical import StockHistoricalDataClient
-                    from alpaca.data.requests import StockLatestBarRequest
                     API_KEY = os.environ.get("APCA_API_KEY_ID")
                     API_SECRET = os.environ.get("APCA_API_SECRET_KEY")
                     stock_client = StockHistoricalDataClient(API_KEY, API_SECRET)
                     bar_resp = stock_client.get_stock_latest_bar(StockLatestBarRequest(symbol_or_symbols=ticker))
                     if bar_resp and ticker.upper() in bar_resp:
                         underlying_price = bar_resp[ticker.upper()].close
-                except Exception:
+                        print(f"[{ticker}] Got current price from Alpaca: {underlying_price}")
+                except Exception as e:
+                    print(f"[{ticker}] Error getting Alpaca current price: {e}")
                     pass
                 if underlying_price is None:
                     stock = yf.Ticker(ticker)
                     underlying_price = stock.history(period='1d')['Close'].iloc[0]
+                    print(f"[{ticker}] Using Yahoo for current price: {underlying_price}")
                 options_client = OptionHistoricalDataClient(
                     api_key=os.environ.get("APCA_API_KEY_ID"),
                     secret_key=os.environ.get("APCA_API_SECRET_KEY")
@@ -192,59 +200,146 @@ def compute_recommendation(ticker):
                 # Only accept Alpaca data if there are at least two expiries worth of IVs
                 if len(atm_iv) >= 2:
                     alpaca_success = True
+                    print(f"[{ticker}] Successfully retrieved Alpaca IV data for {len(atm_iv)} expiries")
+                    # Calculate term structure from Alpaca IV data
+                    today = datetime.today().date()
+                    dtes = []
+                    ivs = []
+                    for exp_date, iv in atm_iv.items():
+                        exp_date_obj = datetime.strptime(exp_date, "%Y-%m-%d").date()
+                        days_to_expiry = (exp_date_obj - today).days
+                        dtes.append(days_to_expiry)
+                        ivs.append(iv)
+                    term_spline = build_term_structure(dtes, ivs)
+                    ts_slope_0_45 = (term_spline(45) - term_spline(dtes[0])) / (45-dtes[0])
+                    
+                    # Now that we have Alpaca IV data, calculate RV using Alpaca data too
+                    print(f"[{ticker}] Attempting to calculate RV using Alpaca price history...")
+                    try:
+                        now_utc = datetime.now(timezone.utc)
+                        end_dt = now_utc
+                        start_dt = end_dt - timedelta(days=90)  # Get 3 months of data
+                        
+                        bars_request = StockBarsRequest(
+                            symbol_or_symbols=ticker,
+                            timeframe=TimeFrame.Day,
+                            start=start_dt,
+                            end=end_dt,
+                            feed=DataFeed.IEX
+                        )
+                        
+                        bars_response = stock_client.get_stock_bars(bars_request)
+                        
+                        # Process bar data for RV calculation
+                        ticker_data_list = []
+                        if bars_response:
+                            try:
+                                # Try to access data properly - different Alpaca API versions may structure data differently
+                                if hasattr(bars_response, 'data') and hasattr(bars_response.data, 'get'):
+                                    # Newer Alpaca SDK structure
+                                    ticker_data_list = bars_response.data.get(ticker, [])
+                                else:
+                                    # Direct dictionary access (older style)
+                                    ticker_data_list = bars_response[ticker]
+                            except (KeyError, AttributeError) as e:
+                                print(f"[{ticker}] Error accessing bars data structure: {e}")
+                                
+                            
+                            if ticker_data_list:
+                                bars_data = []
+                                for bar in ticker_data_list:
+                                    bars_data.append({
+                                        'Open': bar.open,
+                                        'High': bar.high,
+                                        'Low': bar.low,
+                                        'Close': bar.close,
+                                        'Volume': bar.volume,
+                                        'Date': bar.timestamp
+                                    })
+                                
+                                if len(bars_data) >= 30:  # Need at least 30 days for Yang-Zhang
+                                    price_df = pd.DataFrame(bars_data)
+                                    price_df.set_index('Date', inplace=True)
+                                    price_df.sort_index(inplace=True)  # Ensure data is sorted by date
+                                    
+                                    # Calculate RV using Yang-Zhang
+                                    rv30 = yang_zhang(price_df)
+                                    iv30_rv30 = term_spline(30) / rv30
+                                    print(f"[{ticker}] USING ALPACA FOR BOTH IV AND RV. IV30={term_spline(30):.4f}, RV30={rv30:.4f}, Ratio={iv30_rv30:.4f}")
+                                    
+                                    # Always use Yahoo for average volume calculation
+                                    print(f"[{ticker}] Fetching volume data from Yahoo Finance")
+                                    stock_yf = yf.Ticker(ticker)
+                                    price_history = stock_yf.history(period='3mo')
+                                    avg_volume = price_history['Volume'].rolling(30).mean().dropna().iloc[-1]
+                                    
+                                    expected_move = str(round(straddle / underlying_price * 100, 2)) + "%" if straddle else None
+                                    
+                                    return {'avg_volume': avg_volume >= 1500000, 
+                                            'iv30_rv30': iv30_rv30 >= 1.25, 
+                                            'ts_slope_0_45': ts_slope_0_45 <= -0.00406, 
+                                            'expected_move': expected_move}
+                                else:
+                                    print(f"[{ticker}] Not enough bars from Alpaca (need >= 30, got {len(bars_data)}). Falling back to Yahoo.")
+                            else:
+                                print(f"[{ticker}] No bar data found in the Alpaca response. Falling back to Yahoo.")
+                    except Exception as e:
+                        print(f"[{ticker}] Error calculating RV from Alpaca data: {e}. Falling back to Yahoo.")
             except Exception as e:
-                print(f"Alpaca option chain error: {e}")
-        if not alpaca_success:
-            print("Falling back to Yahoo")
-            # Fallback to Yahoo
-            try:
-                stock = yf.Ticker(ticker)
-                if len(stock.options) == 0:
-                    raise KeyError()
-            except KeyError:
-                return f"Error: No options found for stock symbol '{ticker}'."
-            exp_dates = list(stock.options)
-            try:
-                exp_dates = filter_dates(exp_dates)
-            except:
-                return "Error: Not enough option data."
-            options_chains = {}
-            for exp_date in exp_dates:
-                options_chains[exp_date] = stock.option_chain(exp_date)
-            try:
-                underlying_price = stock.history(period='1d')['Close'].iloc[0]
-            except Exception:
-                return "Error: Unable to retrieve underlying stock price."
-            i = 0
-            for exp_date, chain in options_chains.items():
-                calls = getattr(chain, 'calls', None)
-                puts = getattr(chain, 'puts', None)
-                if calls is None or puts is None or calls.empty or puts.empty:
-                    continue
-                call_diffs = (calls['strike'] - underlying_price).abs()
-                call_idx = call_diffs.idxmin()
-                call_iv = calls.loc[call_idx, 'impliedVolatility']
-                put_diffs = (puts['strike'] - underlying_price).abs()
-                put_idx = put_diffs.idxmin()
-                put_iv = puts.loc[put_idx, 'impliedVolatility']
-                atm_iv_value = (call_iv + put_iv) / 2.0
-                atm_iv[exp_date] = atm_iv_value
-                if i == 0:
-                    call_bid = calls.loc[call_idx, 'bid']
-                    call_ask = calls.loc[call_idx, 'ask']
-                    put_bid = puts.loc[put_idx, 'bid']
-                    put_ask = puts.loc[put_idx, 'ask']
-                    if call_bid is not None and call_ask is not None:
-                        call_mid = (call_bid + call_ask) / 2.0
-                    else:
-                        call_mid = None
-                    if put_bid is not None and put_ask is not None:
-                        put_mid = (put_bid + put_ask) / 2.0
-                    else:
-                        put_mid = None
-                    if call_mid is not None and put_mid is not None:
-                        straddle = (call_mid + put_mid)
-                i += 1
+                print(f"[{ticker}] Alpaca option chain processing error: {e}")
+
+        # Use Yahoo Finance for both IV and RV if Alpaca failed
+        print(f"[{ticker}] USING YAHOO FINANCE FOR BOTH IV AND RV CALCULATIONS")
+        try:
+            stock = yf.Ticker(ticker)
+            if len(stock.options) == 0:
+                raise KeyError()
+        except KeyError:
+            return f"Error: No options found for stock symbol '{ticker}'."
+        exp_dates = list(stock.options)
+        try:
+            exp_dates = filter_dates(exp_dates)
+        except:
+            return "Error: Not enough option data."
+        options_chains = {}
+        for exp_date in exp_dates:
+            options_chains[exp_date] = stock.option_chain(exp_date)
+        try:
+            underlying_price = stock.history(period='1d')['Close'].iloc[0]
+        except Exception:
+            return "Error: Unable to retrieve underlying stock price."
+        i = 0
+        atm_iv = {}  # Reset atm_iv for Yahoo data
+        straddle = None  # Reset straddle for Yahoo data
+        for exp_date, chain in options_chains.items():
+            calls = getattr(chain, 'calls', None)
+            puts = getattr(chain, 'puts', None)
+            if calls is None or puts is None or calls.empty or puts.empty:
+                continue
+            call_diffs = (calls['strike'] - underlying_price).abs()
+            call_idx = call_diffs.idxmin()
+            call_iv = calls.loc[call_idx, 'impliedVolatility']
+            put_diffs = (puts['strike'] - underlying_price).abs()
+            put_idx = put_diffs.idxmin()
+            put_iv = puts.loc[put_idx, 'impliedVolatility']
+            atm_iv_value = (call_iv + put_iv) / 2.0
+            atm_iv[exp_date] = atm_iv_value
+            if i == 0:
+                call_bid = calls.loc[call_idx, 'bid']
+                call_ask = calls.loc[call_idx, 'ask']
+                put_bid = puts.loc[put_idx, 'bid']
+                put_ask = puts.loc[put_idx, 'ask']
+                if call_bid is not None and call_ask is not None:
+                    call_mid = (call_bid + call_ask) / 2.0
+                else:
+                    call_mid = None
+                if put_bid is not None and put_ask is not None:
+                    put_mid = (put_bid + put_ask) / 2.0
+                else:
+                    put_mid = None
+                if call_mid is not None and put_mid is not None:
+                    straddle = (call_mid + put_mid)
+            i += 1
         if not atm_iv:
             return "Error: Could not determine ATM IV for any expiration dates."
         today = datetime.today().date()
@@ -257,10 +352,12 @@ def compute_recommendation(ticker):
             ivs.append(iv)
         term_spline = build_term_structure(dtes, ivs)
         ts_slope_0_45 = (term_spline(45) - term_spline(dtes[0])) / (45-dtes[0])
-        # Use Yahoo for realized volatility and volume
-        stock = yf.Ticker(ticker)
+        
+        # Use Yahoo for RV calculation
         price_history = stock.history(period='3mo')
-        iv30_rv30 = term_spline(30) / yang_zhang(price_history)
+        rv30 = yang_zhang(price_history)
+        iv30_rv30 = term_spline(30) / rv30
+        print(f"[{ticker}] Yahoo IV30={term_spline(30):.4f}, RV30={rv30:.4f}, Ratio={iv30_rv30:.4f}")
         avg_volume = price_history['Volume'].rolling(30).mean().dropna().iloc[-1]
         expected_move = str(round(straddle / underlying_price * 100,2)) + "%" if straddle else None
         return {'avg_volume': avg_volume >= 1500000, 'iv30_rv30': iv30_rv30 >= 1.25, 'ts_slope_0_45': ts_slope_0_45 <= -0.00406, 'expected_move': expected_move}
