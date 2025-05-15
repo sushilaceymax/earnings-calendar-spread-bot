@@ -99,6 +99,8 @@ def get_total_profit():
 def post_trade(trade_data):
     """POST a new trade to the Google Apps Script endpoint."""
     try:
+        # include action flag for create
+        trade_data['action'] = 'create'
         r = requests.post(GOOGLE_SCRIPT_URL, json=trade_data)
         r.raise_for_status()
         print(f"POST trade: {trade_data} -> {r.text}")
@@ -120,10 +122,10 @@ def post_trade(trade_data):
                     trade_data.get('Long Symbol'),
                     trade_data.get('Open Date'),
                     trade_data.get('Open Price'),
-                    trade_data.get('Open Comm.'),
+                    trade_data.get('Open Comm.', 0),
                     trade_data.get('Close Date'),
                     trade_data.get('Close Price'),
-                    trade_data.get('Close Comm.')
+                    trade_data.get('Close Comm.', 0)
                 )
             )
             conn.commit()
@@ -167,7 +169,7 @@ def update_trade(trade_data):
                 (
                     trade_data.get('Close Date'),
                     trade_data.get('Close Price'),
-                    trade_data.get('Close Comm.'),
+                    trade_data.get('Close Comm.', 0),
                     trade_data.get('Ticker'),
                     trade_data.get('Open Date')
                 )
@@ -177,6 +179,8 @@ def update_trade(trade_data):
         except Exception as db_e:
             print(f"Error updating trade in SQLite: {db_e}")
         
+        # include action flag for update
+        trade_data['action'] = 'update'
         r = requests.post(GOOGLE_SCRIPT_URL, json=trade_data)
         r.raise_for_status()
         print(f"Updated trade: {trade_data} -> {r.text}")
@@ -395,7 +399,7 @@ def run_trade_workflow():
                         'Ticker': ticker,
                         'Implied Move': implied_move,
                         'Structure': 'Calendar Spread',
-                        'Side': 'Long',
+                        'Side': 'debit',
                         'When': when_norm,
                         # Size, Open Date, Open Price, Open Comm. will be set per fill
                         'Close Date': '',
@@ -497,7 +501,7 @@ def run_trade_workflow():
                         'Ticker': ticker,
                         'Implied Move': implied_move,
                         'Structure': 'Calendar Spread',
-                        'Side': 'Long',
+                        'Side': 'debit',
                         'When': when_norm,
                         # Size, Open Date, Open Price, Open Comm. will be set per fill
                         'Close Date': '',

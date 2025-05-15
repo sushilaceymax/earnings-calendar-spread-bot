@@ -258,9 +258,6 @@ def close_calendar_spread_order(short_symbol, long_symbol, quantity, on_filled=N
                 filled = wait_for_fill(client, last_order.id, timeout=60)
                 filled_qty = int(float(getattr(filled, 'filled_qty', 0)))
                 remaining -= filled_qty
-                # fire callback for this partial/full fill
-                if on_filled:
-                    on_filled(filled)
                 if remaining <= 0:
                     break
             except TimeoutError:
