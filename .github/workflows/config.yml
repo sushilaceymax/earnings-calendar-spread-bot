@@ -59,8 +59,8 @@ jobs:
           current_time=$(TZ="America/New_York" date +'%H:%M')
           echo "Current ET Time: $current_time"
           current_minutes=$((10#$(echo "$current_time" | cut -d: -f1)*60 + 10#$(echo "$current_time" | cut -d: -f2)))
-          if ! (( (current_minutes >= 585 && current_minutes <= 615) || (current_minutes >= 945 && current_minutes <= 975) )); then
-            echo "Not within valid time window (09:45-10:15 or 15:45-16:15 ET). Exiting."
+          if ! (( (current_minutes >= 580 && current_minutes <= 610) || (current_minutes >= 940 && current_minutes <= 970) )); then
+            echo "Not within valid time window (09:40-10:10 or 15:40-16:10 ET). Exiting."
             exit 1
           fi
 
