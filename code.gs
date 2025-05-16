@@ -36,9 +36,12 @@ function doPost(e) {
     for (var i = 1; i < values.length; i++) {
       if (values[i][headers.indexOf("Ticker")] == keyTicker &&
           values[i][headers.indexOf("Open Date")] == keyOpenDate) {
-        for (var j = 0; j < headers.length; j++) {
-          if (data[headers[j]] !== undefined) {
-            sheet.getRange(i + 1, j + 1).setValue(data[headers[j]]);
+        // Only update columns A–L (first 12 headers)
+        var colsToUpdate = Math.min(headers.length, 12);
+        for (var j = 0; j < colsToUpdate; j++) {
+          var header = headers[j];
+          if (data[header] !== undefined) {
+            sheet.getRange(i + 1, j + 1).setValue(data[header]);
           }
         }
         logMessage += ". Match found at row " + (i + 1) + ". Row updated.";
@@ -55,9 +58,10 @@ function doPost(e) {
   // Handle create/append action
   var values = sheet.getDataRange().getValues();
   var headers = values[0];
+  var colsToWrite = Math.min(headers.length, 12);
   var tickerColIndex = headers.indexOf("Ticker");
   if (tickerColIndex === -1) {
-    var rowData = headers.map(function(header) { return data[header] || ""; });
+    var rowData = headers.slice(0, colsToWrite).map(function(header) { return data[header] || ""; });
     sheet.appendRow(rowData);
     return ContentService.createTextOutput("OK - Appended (Ticker header not found)").setMimeType(ContentService.MimeType.TEXT);
   }
@@ -68,9 +72,9 @@ function doPost(e) {
       break;
     }
   }
-  var newRowData = headers.map(function(header) { return data[header] || ""; });
+  var newRowData = headers.slice(0, colsToWrite).map(function(header) { return data[header] || ""; });
   if (targetRowIndex !== -1) {
-    sheet.getRange(targetRowIndex, 1, 1, newRowData.length).setValues([newRowData]);
+    sheet.getRange(targetRowIndex, 1, 1, colsToWrite).setValues([newRowData]);
     return ContentService.createTextOutput("OK - Updated row " + targetRowIndex).setMimeType(ContentService.MimeType.TEXT);
   } else {
     sheet.appendRow(newRowData);

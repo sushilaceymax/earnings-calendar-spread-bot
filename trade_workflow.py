@@ -299,8 +299,7 @@ def run_trade_workflow():
                 order = close_calendar_spread_order(
                     trade.get('Short Symbol'),
                     trade.get('Long Symbol'),
-                    trade.get('Size'),
-                    on_filled=_on_close_filled
+                    trade.get('Size')
                 )
                 th = monitor_fill_async(client, order, _on_close_filled)
                 trade_monitor_threads.append(th)

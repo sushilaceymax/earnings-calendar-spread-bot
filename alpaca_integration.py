@@ -81,8 +81,9 @@ def place_calendar_spread_order(short_symbol, long_symbol, original_intended_qua
 
         remaining_overall_quantity = original_intended_quantity
         total_cost_so_far = 0.0
-        cumulative_filled_order_obj = None # To store the last fill details for the callback
-        filled_something_overall = False
+        total_filled_qty = 0
+        total_filled_value = 0.0
+        total_commission = 0.0
 
         print(f"Starting trade for {short_symbol}/{long_symbol}: original_qty={original_intended_quantity}, max_total_cost_allowed=${max_total_cost_allowed if max_total_cost_allowed is not None else 'N/A'}")
 
@@ -146,20 +147,14 @@ def place_calendar_spread_order(short_symbol, long_symbol, original_intended_qua
                 filled_qty_this_order = int(float(getattr(filled_order_details, 'filled_qty', 0) or 0))
                 
                 if filled_qty_this_order > 0:
-                    filled_something_overall = True
-                    avg_fill_price_this_order = float(getattr(filled_order_details, 'filled_avg_price', 0) or 0)
-                    cost_this_fill = avg_fill_price_this_order * filled_qty_this_order * 100
+                    avg_price = float(getattr(filled_order_details, 'filled_avg_price', 0) or 0)
+                    cost_this_fill = avg_price * filled_qty_this_order * 100
                     total_cost_so_far += cost_this_fill
                     remaining_overall_quantity -= filled_qty_this_order
-                    cumulative_filled_order_obj = filled_order_details # Update with latest fill details
-                    
-                    print(f"Order {submitted_order_this_attempt.id} for {short_symbol}/{long_symbol}: Filled {filled_qty_this_order} at ${avg_fill_price_this_order}. Remaining overall: {remaining_overall_quantity}. Total cost so far: ${total_cost_so_far:.2f}")
-
-                    if on_filled and filled_qty_this_order == qty_for_this_order_attempt: # Callback if this attempt fully filled
-                         # The callback expects the context of the *entire trade attempt* not just one slice.
-                         # For simplicity, we'll call it per filled order that was fully filled for its attempt.
-                         # A more complex callback might want cumulative details.
-                        on_filled(filled_order_details) 
+                    total_filled_qty += filled_qty_this_order
+                    total_filled_value += avg_price * filled_qty_this_order
+                    total_commission += getattr(filled_order_details, 'commission', 0) or 0
+                    print(f"Order {submitted_order_this_attempt.id} for {short_symbol}/{long_symbol}: Filled {filled_qty_this_order} at ${avg_price}. Remaining overall: {remaining_overall_quantity}. Total cost so far: ${total_cost_so_far:.2f}")
 
                 if remaining_overall_quantity <= 0:
                     print(f"Entire trade for {short_symbol}/{long_symbol} ({original_intended_quantity} contracts) filled.")
@@ -190,24 +185,27 @@ def place_calendar_spread_order(short_symbol, long_symbol, original_intended_qua
             
             price_to_chase += chase_step
         
-        if remaining_overall_quantity > 0 and filled_something_overall:
-             print(f"Partially filled trade for {short_symbol}/{long_symbol}. Filled {original_intended_quantity - remaining_overall_quantity} out of {original_intended_quantity}. Cost: ${total_cost_so_far:.2f}")
-        elif not filled_something_overall:
+        if total_filled_qty > 0:
+            cumulative_avg = total_filled_value / total_filled_qty
+            summary = type('OrderSummary',(object,),{})
+            summary.filled_avg_price = str(cumulative_avg)
+            summary.filled_qty = str(total_filled_qty)
+            summary.commission = total_commission
+            summary.id = getattr(filled_order_details, 'id', 'cumulative_open_fill')
+            summary.symbol = short_symbol
+            if on_filled:
+                on_filled(summary)
+            return summary
+        else:
             print(f"Could not fill any quantity for {short_symbol}/{long_symbol} within price limits (last attempt price: ${round(price_to_chase-chase_step,2)}, effective max chase: ${effective_max_chase_price:.2f}).")
-        
-        # Return the details of the last successful fill if any, or None
-        # The `on_filled` callback would have been called per successful complete slice.
-        # For a final representation, cumulative_filled_order_obj might be useful if the caller expects one Order object. 
-        # However, for posting to sheets, each slice might be posted via its own callback firing.
-        # Returning the last one for now.
-        return cumulative_filled_order_obj 
+            return None
 
     except Exception as e:
         print(f"Error placing calendar spread order for {short_symbol}/{long_symbol}: {e}")
         return None
 
 
-def close_calendar_spread_order(short_symbol, long_symbol, quantity, on_filled=None):
+def close_calendar_spread_order(short_symbol, long_symbol, quantity):
     """
     Close both legs of the call calendar spread using provided OCC symbols.
     """
@@ -217,14 +215,16 @@ def close_calendar_spread_order(short_symbol, long_symbol, quantity, on_filled=N
     try:
         # Fetch quotes for closing creeping logic
         short_bid, short_ask, long_bid, long_ask = get_spread_quotes(short_symbol, long_symbol)
+        print(f"Initial quotes for {short_symbol}: Bid={short_bid}, Ask={short_ask}")
+        print(f"Initial quotes for {long_symbol}: Bid={long_bid}, Ask={long_ask}")
         
         # Calculate the most aggressive credit target: selling long at its ask, buying short at its bid.
         # This is what the user means by "try at the ask".
         initial_target_credit_value = long_ask - short_bid
         
         # min_price will be the upper bound for the Alpaca limit_price (max debit we are willing to pay)
-        # As per user's direction, this is long_bid.
-        min_price = long_bid 
+        # User wants to use short_ask as the max debit.
+        min_price = short_ask
         
         # price will now represent the actual limit_price to be sent to Alpaca.
         # Negative for credit, positive for debit. Start by targeting the most aggressive credit.
@@ -236,6 +236,8 @@ def close_calendar_spread_order(short_symbol, long_symbol, quantity, on_filled=N
         step = max((spread_short + spread_long) / 2.0, 0.01)
         remaining = quantity
         last_order = None
+        total_filled_qty = 0
+        total_filled_value = 0.0
         
         # Creeping DAY loop.
         # price (Alpaca limit_price) starts negative (credit) and creeps up towards min_price (max debit).
@@ -266,8 +268,17 @@ def close_calendar_spread_order(short_symbol, long_symbol, quantity, on_filled=N
             try:
                 filled = wait_for_fill(client, last_order.id, timeout=60)
                 filled_qty = int(float(getattr(filled, 'filled_qty', 0)))
+                if filled_qty > 0:
+                    avg_price_this_fill = float(getattr(filled, 'filled_avg_price', 0.0))
+                    total_filled_qty += filled_qty
+                    total_filled_value += avg_price_this_fill * filled_qty
                 remaining -= filled_qty
                 if remaining <= 0:
+                    if total_filled_qty > 0:
+                        cumulative_avg_price = total_filled_value / total_filled_qty
+                        setattr(filled, 'filled_avg_price', str(cumulative_avg_price))
+                        setattr(filled, 'filled_qty', str(total_filled_qty))
+                        last_order = filled
                     break
             except TimeoutError:
                 # cancel unfilled order after timeout for DAY TIF
@@ -289,6 +300,25 @@ def close_calendar_spread_order(short_symbol, long_symbol, quantity, on_filled=N
                         else:
                             print(f"Order {last_order.id} not cancelable (likely filled); ignoring 422.")
             price += step # Creep price upwards (less credit or more debit)
+        
+        if total_filled_qty > 0 and total_filled_qty < quantity : # Partially filled overall
+            if last_order:
+                cumulative_avg_price = total_filled_value / total_filled_qty
+                final_summary_order = type('OrderSummary', (object,), {
+                    'filled_avg_price': str(cumulative_avg_price),
+                    'filled_qty': str(total_filled_qty),
+                    'commission': getattr(last_order, 'commission', 0),
+                    'id': getattr(last_order, 'id', 'cumulative_partial_fill'),
+                    'symbol': short_symbol
+                })
+                return final_summary_order
+
+        elif total_filled_qty == quantity: # Fully filled (possibly in multiple steps)
+             return last_order
+
+        # If no fills at all, last_order will be the last submitted (and presumably cancelled) order.
+        # The `monitor_fill_async` will timeout or error, and `on_filled` won't be called.
+        # This is existing behavior.
         return last_order
     except Exception as e:
         print(f"Error closing calendar spread order: {e}")
