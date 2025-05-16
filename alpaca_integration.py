@@ -117,13 +117,13 @@ def place_calendar_spread_order(short_symbol, long_symbol, original_intended_qua
             legs_for_this_order = [
                 OptionLegRequest(
                     symbol=short_symbol,
-                    ratio_qty=1, # Use ratio for the order quantity
+                    ratio_qty=1, # ratio_qty_short Use ratio for the order quantity
                     side=OrderSide.SELL,
                     position_intent=PositionIntent.SELL_TO_OPEN
                 ),
                 OptionLegRequest(
                     symbol=long_symbol,
-                    ratio_qty=1, # Use ratio for the order quantity
+                    ratio_qty=1, # ratio_qty_long Use ratio for the order quantity
                     side=OrderSide.BUY,
                     position_intent=PositionIntent.BUY_TO_OPEN
                 )
@@ -215,41 +215,50 @@ def close_calendar_spread_order(short_symbol, long_symbol, quantity, on_filled=N
     if not client:
         return None
     try:
-        # build multi-leg market close order using SDK models
-        legs = [
-            OptionLegRequest(
-                symbol=short_symbol,
-                ratio_qty=1,
-                side=OrderSide.BUY,
-                position_intent=PositionIntent.BUY_TO_CLOSE
-            ),
-            OptionLegRequest(
-                symbol=long_symbol,
-                ratio_qty=1,
-                side=OrderSide.SELL,
-                position_intent=PositionIntent.SELL_TO_CLOSE
-            )
-        ]
         # Fetch quotes for closing creeping logic
         short_bid, short_ask, long_bid, long_ask = get_spread_quotes(short_symbol, long_symbol)
-        mid_spread = (long_bid + long_ask) / 2 - (short_bid + short_ask) / 2
-        # previously used the natural market bid (long_bid - short_ask) as floor
-        min_price = long_bid
-        price = mid_spread
+        
+        # Calculate the most aggressive credit target: selling long at its ask, buying short at its bid.
+        # This is what the user means by "try at the ask".
+        initial_target_credit_value = long_ask - short_bid
+        
+        # min_price will be the upper bound for the Alpaca limit_price (max debit we are willing to pay)
+        # As per user's direction, this is long_bid.
+        min_price = long_bid 
+        
+        # price will now represent the actual limit_price to be sent to Alpaca.
+        # Negative for credit, positive for debit. Start by targeting the most aggressive credit.
+        price = -initial_target_credit_value # e.g., if target credit is $0.60, price is -0.60
+        
         # dynamic crawling step: half the sum of bid-ask spreads on both legs (min $0.01)
         spread_short = short_ask - short_bid
         spread_long = long_ask - long_bid
         step = max((spread_short + spread_long) / 2.0, 0.01)
         remaining = quantity
         last_order = None
-        # Creeping DAY loop from mid down toward floor
-        while remaining > 0 and price >= min_price:
-            lp = round(price, 2)
+        
+        # Creeping DAY loop.
+        # price (Alpaca limit_price) starts negative (credit) and creeps up towards min_price (max debit).
+        while remaining > 0 and price <= min_price:
+            lp = round(price, 2) # lp is the correctly signed Alpaca limit_price
             req = LimitOrderRequest(
                 order_class=OrderClass.MLEG,
                 time_in_force=TimeInForce.DAY,
                 qty=remaining,
-                legs=legs,
+                legs=[
+                    OptionLegRequest(
+                        symbol=short_symbol,
+                        ratio_qty=1,
+                        side=OrderSide.BUY,
+                        position_intent=PositionIntent.BUY_TO_CLOSE
+                    ),
+                    OptionLegRequest(
+                        symbol=long_symbol,
+                        ratio_qty=1,
+                        side=OrderSide.SELL,
+                        position_intent=PositionIntent.SELL_TO_CLOSE
+                    )
+                ],
                 limit_price=lp
             )
             last_order = client.submit_order(req)
@@ -279,7 +288,7 @@ def close_calendar_spread_order(short_symbol, long_symbol, quantity, on_filled=N
                             raise
                         else:
                             print(f"Order {last_order.id} not cancelable (likely filled); ignoring 422.")
-            price -= step
+            price += step # Creep price upwards (less credit or more debit)
         return last_order
     except Exception as e:
         print(f"Error closing calendar spread order: {e}")
