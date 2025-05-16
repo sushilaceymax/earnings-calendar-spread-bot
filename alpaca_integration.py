@@ -117,13 +117,13 @@ def place_calendar_spread_order(short_symbol, long_symbol, original_intended_qua
             legs_for_this_order = [
                 OptionLegRequest(
                     symbol=short_symbol,
-                    ratio_qty=ratio_qty_short, # Use ratio for the order quantity
+                    ratio_qty=1, # Use ratio for the order quantity
                     side=OrderSide.SELL,
                     position_intent=PositionIntent.SELL_TO_OPEN
                 ),
                 OptionLegRequest(
                     symbol=long_symbol,
-                    ratio_qty=ratio_qty_long, # Use ratio for the order quantity
+                    ratio_qty=1, # Use ratio for the order quantity
                     side=OrderSide.BUY,
                     position_intent=PositionIntent.BUY_TO_OPEN
                 )
