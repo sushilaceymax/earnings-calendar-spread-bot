@@ -101,6 +101,8 @@ def post_trade(trade_data):
     try:
         # include action flag for create
         trade_data['action'] = 'create'
+        trade_data.setdefault('Open Comm.', 0)
+        trade_data.setdefault('Close Comm.', 0)
         r = requests.post(GOOGLE_SCRIPT_URL, json=trade_data)
         r.raise_for_status()
         print(f"POST trade: {trade_data} -> {r.text}")
