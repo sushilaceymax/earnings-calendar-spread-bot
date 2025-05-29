@@ -194,10 +194,13 @@ def is_time_to_open(earnings_date, when):
     now = datetime.now(tz=eastern)
     market_close = time(16, 0)
     if when == "BMO":
-        open_dt = datetime.combine(earnings_date - timedelta(days=1), market_close, tzinfo=eastern) - timedelta(minutes=15)
+        # Open window starts at 3:35 PM ET (25 minutes before close) to match GitHub Actions schedule
+        open_dt = datetime.combine(earnings_date - timedelta(days=1), market_close, tzinfo=eastern) - timedelta(minutes=25)
     else:  # AMC
-        open_dt = datetime.combine(earnings_date, market_close, tzinfo=eastern) - timedelta(minutes=15)
-    return open_dt <= now < open_dt + timedelta(minutes=30)
+        # Open window starts at 3:35 PM ET (25 minutes before close) to match GitHub Actions schedule
+        open_dt = datetime.combine(earnings_date, market_close, tzinfo=eastern) - timedelta(minutes=25)
+    # Extended window: 3:35 PM to 4:15 PM ET (40 minutes total)
+    return open_dt <= now < open_dt + timedelta(minutes=40)
 
 def is_time_to_close(earnings_date, when):
     eastern = ZoneInfo("America/New_York")
