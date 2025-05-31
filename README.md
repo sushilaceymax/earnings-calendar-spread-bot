@@ -35,6 +35,8 @@ pip install -r requirements.txt
 ```bash
 python automation.py
 ```
+### 5. Automate
+Add the variables to GitHub secrets and enable GitHub Actions 
 
 ## Example Workflow
 - **Screen for Earnings**: Bot fetches tomorrow's earnings tickers.
@@ -42,10 +44,6 @@ python automation.py
 - **Open Trades**: Places calendar spread trades at the correct time (BMO/AMC logic).
 - **Track & Close**: Monitors open trades and closes them at the correct time, updating Google Sheets.
 
-## CI/CD & Testing
-- CircleCI config is in `.circleci/config.yml`.
-- Pip install time and build file retention are logged in the build output.
-- To run tests locally, add your test scripts and run them as needed.
 
 
 ## Disclaimer
