@@ -1,6 +1,6 @@
 # Earnings Trade Automation
 
-Automated trading bot for executing earnings calendar spread strategies using options, with robust risk management and workflow automation. Integrates with Google Sheets for trade tracking and Alpaca for order execution. 
+Automated trading bot for executing earnings calendar spread strategies using options in a workflow automation. Integrates with Google Sheets for trade tracking and Alpaca for order execution. 
 
 ## Features
 - **Automated Earnings Calendar Spread Trading**: Opens and closes calendar spreads around earnings events based on strict screening criteria.
