@@ -17,7 +17,10 @@ git clone https://github.com/yourusername/earnings-calendar-spread-bot.git
 cd earnings-calendar-spread-bot
 ```
 
-### 2. Set Up Environment Variables
+### 2. Google Sheets Set Up (Optional)
+Add code.gs to Google Apps Script 
+
+### 3. Set Up Environment Variables
 Create a `.env` file in the root directory with your credentials:
 ```
 APCA_API_KEY_ID=your-alpaca-key
@@ -26,17 +29,18 @@ GOOGLE_SCRIPT_URL=your-google-apps-script-url
 ALPACA_PAPER=true  # Set to 'false' to use live trading (default is 'true' for paper trading)
 ```
 
-### 3. Install Dependencies
+### 4. Install Dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Run the Bot
+### 5. Run the Bot
 ```bash
 python automation.py
 ```
-### 5. Automate
+### 6. Automate
 Add the variables to GitHub secrets and enable GitHub Actions 
+
 
 ## Example Workflow
 - **Screen for Earnings**: Bot fetches tomorrow's earnings tickers.
