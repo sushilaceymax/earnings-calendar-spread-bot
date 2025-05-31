@@ -18,7 +18,7 @@ cd earnings-calendar-spread-bot
 ```
 
 ### 2. Google Sheets Set Up (Optional)
-Add code.gs to Google Apps Script 
+Create a copy of https://docs.google.com/spreadsheets/d/1qOu4PJtcpYwLZgFFIpVr8FXD12dXoWZaKxSeg9FR7lU/ and add code.gs to App Script
 
 ### 3. Set Up Environment Variables
 Create a `.env` file in the root directory with your credentials:
