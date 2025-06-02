@@ -39,7 +39,7 @@ pip install -r requirements.txt
 python automation.py
 ```
 ### 6. Automate
-Add the variables to GitHub secrets and enable GitHub Actions 
+Fork the repository, add the variables to GitHub secrets, and enable GitHub Actions.
 
 
 ## Example Workflow
