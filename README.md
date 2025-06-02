@@ -9,6 +9,17 @@ Automated trading bot for executing earnings calendar spread strategies using op
 - **Alpaca API Integration**: Places and closes trades automatically using Alpaca brokerage API.
 - **Configurable and Extensible**: Modular codebase for easy strategy tweaks and integration.
 
+## Strategy Overview
+We implement an earnings volatility selling strategy focusing on calendar spreads around earnings events:
+
+- Rationale: Implied volatility spikes ahead of earnings due to hedgers and speculators, creating an opportunity to profit from IV crush and muted stock moves.
+- Trade Structure: At-the-money calendar spreads with a 30-day expiration gap for stability, offering controlled risk compared to straddles.
+- Screening Criteria: Filter for high-probability trades using:
+  - **Term Structure Slope**: Negative slope between front-month and 45-day expirations (backwardation).
+  - **30-Day Average Volume**: Ensures sufficient liquidity and price-insensitive demand.
+  - **IV/RV Ratio**: High implied-to-realized volatility ratio indicates overpriced options.
+- Position Sizing: Apply a 10% Kelly fraction for optimal, risk-managed sizing.
+
 ## Quick Start
 
 ### 1. Clone the Repository
@@ -38,8 +49,10 @@ pip install -r requirements.txt
 ```bash
 python automation.py
 ```
-### 6. Automate
-Fork the repository, add the variables to GitHub secrets, and enable GitHub Actions.
+### 6. Automate with GitHub Actions
+- Fork the repository to your GitHub account (required to enable Actions).
+- In your fork, navigate to **Settings > Secrets > Actions** and add your environment variables.
+- Enable the GitHub Actions workflow in the **Actions** tab.
 
 
 ## Example Workflow
