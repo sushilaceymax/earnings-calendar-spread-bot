@@ -45,11 +45,18 @@ ALPACA_PAPER=true  # Set to 'false' to use live trading (default is 'true' for p
 pip install -r requirements.txt
 ```
 
-### 5. Run the Bot
+### 5. Reset Local Trade Database (Optional)
+Before running the bot for the first time (or to start fresh), delete the existing SQLite database file:
+```bash
+rm trades.db  # Mac/Linux
+del trades.db # Windows (PowerShell)
+```
+
+### 6. Run the Bot
 ```bash
 python automation.py
 ```
-### 6. Automate with GitHub Actions
+### 7. Automate with GitHub Actions
 - Fork the repository to your GitHub account (required to enable Actions).
 - In your fork, navigate to **Settings > Secrets > Actions** and add your environment variables.
 - Enable the GitHub Actions workflow in the **Actions** tab.
