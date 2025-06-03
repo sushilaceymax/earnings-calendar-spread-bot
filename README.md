@@ -45,7 +45,7 @@ ALPACA_PAPER=true  # Set to 'false' to use live trading (default is 'true' for p
 pip install -r requirements.txt
 ```
 
-### 5. Reset Local Trade Database (Optional)
+### 5. Reset Local Trade Database 
 Before running the bot for the first time (or to start fresh), delete the existing SQLite database file:
 ```bash
 rm trades.db  # Mac/Linux
