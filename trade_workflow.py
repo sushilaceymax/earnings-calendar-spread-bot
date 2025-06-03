@@ -306,8 +306,11 @@ def run_trade_workflow():
                     trade.get('Long Symbol'),
                     trade.get('Size')
                 )
-                th = monitor_fill_async(client, order, _on_close_filled)
-                trade_monitor_threads.append(th)
+                if order:
+                    th = monitor_fill_async(client, order, _on_close_filled)
+                    trade_monitor_threads.append(th)
+                else:
+                    print(f"No close order placed for {trade['Ticker']}. Skipping monitor.")
         except Exception as e:
             print(f"Error closing trade: {e}")
     # wait for all close-trade monitor threads before proceeding
