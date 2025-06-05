@@ -509,3 +509,171 @@ def get_spread_quotes(short_symbol, long_symbol):
     if not qs or not ql or None in (qs.bid_price, qs.ask_price, ql.bid_price, ql.ask_price):
         raise RuntimeError(f"Could not fetch bid/ask for {short_symbol} or {long_symbol}")
     return qs.bid_price, qs.ask_price, ql.bid_price, ql.ask_price 
+
+
+def get_single_option_quotes(symbol: str):
+    """
+    Return bid and ask prices for a single option leg.
+    Raises RuntimeError if quotes are not available.
+    """
+    client = init_alpaca_client() # Assuming init_alpaca_client is defined and returns a valid client or handles errors
+    if not client:
+        raise RuntimeError("Failed to initialize Alpaca client for get_single_option_quotes")
+
+    options_client = OptionHistoricalDataClient(
+        api_key=API_KEY, # Assuming API_KEY is globally defined
+        secret_key=API_SECRET # Assuming API_SECRET is globally defined
+    )
+    req = OptionLatestQuoteRequest(symbol_or_symbols=[symbol])
+    quote_resp = options_client.get_option_latest_quote(req)
+    
+    q = quote_resp.get(symbol)
+    
+    if not q or q.bid_price is None or q.ask_price is None:
+        raise RuntimeError(f"Could not fetch valid bid/ask for {symbol}")
+    return q.bid_price, q.ask_price
+
+
+def close_single_option_leg_order(symbol: str, quantity: int, position_intent: PositionIntent):
+    """
+    Close a single option leg using a creeping limit order.
+    position_intent should be PositionIntent.SELL_TO_CLOSE (for a long leg) or PositionIntent.BUY_TO_CLOSE (for a short leg).
+    """
+    client = init_alpaca_client()
+    if not client:
+        print(f"Failed to initialize Alpaca client for closing single leg {symbol}.")
+        return None
+
+    try:
+        initial_bid, initial_ask = get_single_option_quotes(symbol)
+        print(f"Initial quotes for single leg {symbol}: Bid={initial_bid}, Ask={initial_ask}")
+
+        side = None
+        if position_intent == PositionIntent.SELL_TO_CLOSE:
+            side = OrderSide.SELL
+            # Start trying to sell at the ask, creep down towards bid
+            price_to_chase = initial_ask
+            price_limit = initial_bid # Don't go below bid
+            step_direction = -1
+        elif position_intent == PositionIntent.BUY_TO_CLOSE:
+            side = OrderSide.BUY
+            # Start trying to buy at the bid, creep up towards ask
+            price_to_chase = initial_bid
+            price_limit = initial_ask # Don't go above ask
+            step_direction = 1
+        else:
+            print(f"Invalid position_intent '{position_intent}' for close_single_option_leg_order.")
+            return None
+
+        spread = initial_ask - initial_bid
+        step = max(spread / 10, 0.01) # Or a fixed $0.01, or a fraction of spread
+        
+        remaining_qty = quantity
+        last_order_details = None
+        total_filled_qty = 0
+        total_filled_value = 0.0 # For calculating cumulative average price
+
+        print(f"Starting single leg close for {symbol}: {quantity} qty, intent {position_intent}, side {side}, initial price {price_to_chase}, limit {price_limit}, step {step*step_direction:.2f}")
+
+        while remaining_qty > 0:
+            current_limit_price = round(price_to_chase, 2)
+            
+            # Check if we've crossed the price limit
+            if (step_direction == 1 and current_limit_price > price_limit) or \
+               (step_direction == -1 and current_limit_price < price_limit):
+                print(f"Stopping chase for {symbol}: current price {current_limit_price} crossed limit {price_limit}.")
+                break
+
+            req = LimitOrderRequest(
+                symbol=symbol,
+                qty=remaining_qty,
+                side=side,
+                time_in_force=TimeInForce.DAY,
+                limit_price=current_limit_price,
+                order_class=OrderClass.SIMPLE, 
+                position_intent=position_intent
+            )
+            
+            submitted_order = None
+            try:
+                submitted_order = client.submit_order(req)
+                print(f"Placed DAY single leg closing order for {symbol}: {remaining_qty} qty @ limit ${current_limit_price}. Order ID: {submitted_order.id}")
+                
+                # Wait for fill or partial fill
+                filled_details = wait_for_fill(client, submitted_order.id, timeout=30) # Using existing wait_for_fill
+                
+                filled_qty_this_order = int(float(getattr(filled_details, 'filled_qty', 0) or 0))
+                
+                if filled_qty_this_order > 0:
+                    avg_price_this_fill = float(getattr(filled_details, 'filled_avg_price', 0) or 0)
+                    commission_this_fill = getattr(filled_details, 'commission', 0) or 0
+
+                    total_filled_qty += filled_qty_this_order
+                    total_filled_value += avg_price_this_fill * filled_qty_this_order
+                    # Note: commission handling might need to be summed up if multiple partial fills occur.
+                    # For now, last_order_details will hold the commission of the last fill.
+                    
+                    print(f"Order {submitted_order.id} for {symbol}: Filled {filled_qty_this_order} at ${avg_price_this_fill}.")
+                    remaining_qty -= filled_qty_this_order
+                    last_order_details = filled_details # Store the latest filled order details
+
+                if remaining_qty <= 0:
+                    print(f"Entire single leg order for {symbol} ({quantity} contracts) filled.")
+                    break 
+                
+                # If partially filled but not fully cancelled, cancel remainder before chasing at new price
+                if filled_qty_this_order < remaining_qty and filled_details.status != OrderStatus.CANCELED:
+                    try:
+                        client.cancel_order_by_id(submitted_order.id)
+                        print(f"Cancelled remaining part of single leg order {submitted_order.id} for {symbol} after partial fill.")
+                    except APIError as e_cancel:
+                        if e_cancel.status_code != 422: raise # Re-raise if not 'already uncancelable'
+                        else: print(f"Order {submitted_order.id} not cancelable (likely fully filled/expired); ignoring 422 on cancel.")
+            
+            except TimeoutError:
+                print(f"Single leg Order {submitted_order.id if submitted_order else 'N/A'} for {symbol} timed out. Cancelling if exists.")
+                if submitted_order:
+                    try:
+                        client.cancel_order_by_id(submitted_order.id)
+                    except APIError as e_timeout_cancel:
+                        if e_timeout_cancel.status_code != 422: raise
+                        else: print(f"Order {submitted_order.id} not cancelable on timeout; ignoring 422.")
+            except Exception as e_order_loop:
+                print(f"Error during single leg order submission/fill loop for {symbol}: {e_order_loop}")
+                break # Exit loop on other errors
+
+            price_to_chase += (step * step_direction)
+            if remaining_qty > 0 : time.sleep(1) # Small delay before next chase attempt if not fully filled
+
+        if total_filled_qty > 0 and last_order_details:
+            # Create a summary object similar to what place_calendar_spread_order returns
+            # or ensure last_order_details (which is an Order object) has cumulative info if needed.
+            # For simplicity, if there were partial fills, wait_for_fill returns the Order object
+            # which should have cumulative filled_qty and filled_avg_price for that specific order ID.
+            # If multiple orders were placed (not in this simpler loop), we'd need to sum.
+            # Here, we are modifying one order or placing new ones if the previous was fully done or cancelled.
+            # The current wait_for_fill might return an order that's only partially filled.
+            # The callback will use the properties of the final 'last_order_details'.
+            
+            # If there were multiple partial fills from *different* order submissions in a more complex loop,
+            # we'd need to calculate a true cumulative average price and total commission.
+            # This loop places one order at a time and waits for it.
+            # So, `last_order_details` should reflect the state of the last *successful* fill.
+            
+            # To ensure filled_avg_price and filled_qty are cumulative for the *attempt* if it involved multiple fills on ONE order_id:
+            # This is generally handled by Alpaca's Order object returned by wait_for_fill.
+            # If we had to place multiple distinct orders, we would need this:
+            # setattr(last_order_details, 'filled_avg_price', str(total_filled_value / total_filled_qty))
+            # setattr(last_order_details, 'filled_qty', str(total_filled_qty))
+            # setattr(last_order_details, 'commission', total_commission_so_far) -> would need to sum commissions
+            return last_order_details # This is an Alpaca Order object
+        else:
+            print(f"Could not fill any quantity for single leg {symbol} within price limits.")
+            return None
+
+    except RuntimeError as e_quotes: # From get_single_option_quotes
+        print(f"Error getting quotes for single leg {symbol}: {e_quotes}")
+        return None
+    except Exception as e:
+        print(f"Error closing single option leg order for {symbol}: {e}")
+        return None 

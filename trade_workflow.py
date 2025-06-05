@@ -3,10 +3,17 @@ import requests
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, time
 from automation import compute_recommendation, get_tomorrows_earnings, get_todays_earnings
-from alpaca_integration import init_alpaca_client, place_calendar_spread_order, close_calendar_spread_order, get_portfolio_value, select_expiries_and_strike_alpaca, get_alpaca_option_chain, get_option_spread_mid_price, monitor_fill_async
+from alpaca_integration import (
+    init_alpaca_client, place_calendar_spread_order, 
+    close_calendar_spread_order, get_portfolio_value, 
+    select_expiries_and_strike_alpaca, get_alpaca_option_chain, 
+    get_option_spread_mid_price, monitor_fill_async,
+    get_single_option_quotes, close_single_option_leg_order
+)
 import yfinance as yf
 from alpaca.data.historical import OptionHistoricalDataClient
 from alpaca.data.requests import OptionLatestQuoteRequest
+from alpaca.trading.enums import OrderSide, PositionIntent
 from zoneinfo import ZoneInfo
 import sys
 import sqlite3
@@ -310,7 +317,95 @@ def run_trade_workflow():
                     th = monitor_fill_async(client, order, _on_close_filled)
                     trade_monitor_threads.append(th)
                 else:
-                    print(f"No close order placed for {trade['Ticker']}. Skipping monitor.")
+                    print(f"Spread close order for {trade['Ticker']} ({trade.get('Short Symbol')}/{trade.get('Long Symbol')}) failed or was not placed. Checking individual legs.")
+                    short_symbol = trade.get('Short Symbol')
+                    long_symbol = trade.get('Long Symbol')
+                    size = trade.get('Size')
+                    
+                    short_quotable = False
+                    long_quotable = False
+
+                    if short_symbol and size > 0:
+                        try:
+                            get_single_option_quotes(short_symbol)
+                            short_quotable = True
+                            print(f"Short leg {short_symbol} for {trade['Ticker']} is quotable.")
+                        except RuntimeError:
+                            print(f"Short leg {short_symbol} for {trade['Ticker']} is unquotable (likely expired or no market).")
+                        except Exception as e_quote_short:
+                            print(f"Error checking short leg {short_symbol} quotability: {e_quote_short}")
+                    else:
+                        print(f"Skipping quotability check for short leg for {trade['Ticker']} due to missing symbol or zero size.")
+                        short_leg_closed_or_expired = True
+
+                    if long_symbol and size > 0:
+                        try:
+                            get_single_option_quotes(long_symbol)
+                            long_quotable = True
+                            print(f"Long leg {long_symbol} for {trade['Ticker']} is quotable.")
+                        except RuntimeError:
+                            print(f"Long leg {long_symbol} for {trade['Ticker']} is unquotable (likely expired or no market).")
+                        except Exception as e_quote_long:
+                            print(f"Error checking long leg {long_symbol} quotability: {e_quote_long}")
+                    else:
+                        print(f"Skipping quotability check for long leg for {trade['Ticker']} due to missing symbol or zero size.")
+                        long_leg_closed_or_expired = True
+
+                    if not short_quotable and long_quotable:
+                        print(f"Attempting to close remaining long leg {long_symbol} for {trade['Ticker']} as short leg is unquotable.")
+                        single_leg_order = close_single_option_leg_order(long_symbol, size, PositionIntent.SELL_TO_CLOSE)
+                        if single_leg_order:
+                            def _on_single_long_leg_closed(filled, t=trade):
+                                cp = float(getattr(filled, 'filled_avg_price', 0) or 0)
+                                cc = getattr(filled, 'commission', 0) or 0
+                                data = {
+                                    'Ticker': t['Ticker'], 'Open Date': t['Open Date'],
+                                    'Close Date': datetime.now().strftime('%Y-%m-%d'),
+                                    'Close Price': cp,
+                                    'Close Comm.': cc,
+                                }
+                                print(f"Callback: Successfully processed close for remaining long leg {t.get('Long Symbol')} for {t['Ticker']}. Filled: {getattr(filled, 'id', 'N/A')}")
+                                trade_fill_queue.put((update_trade, data))
+                            
+                            th = monitor_fill_async(client, single_leg_order, _on_single_long_leg_closed)
+                            trade_monitor_threads.append(th)
+                        else:
+                            print(f"Failed to place order to close single long leg {long_symbol} for {trade['Ticker']}. Position may require manual review.")
+                    
+                    elif not long_quotable and short_quotable:
+                        print(f"Attempting to close remaining short leg {short_symbol} for {trade['Ticker']} as long leg is unquotable.")
+                        single_leg_order = close_single_option_leg_order(short_symbol, size, PositionIntent.BUY_TO_CLOSE)
+                        if single_leg_order:
+                            def _on_single_short_leg_closed(filled, t=trade):
+                                cp = float(getattr(filled, 'filled_avg_price', 0) or 0)
+                                cc = getattr(filled, 'commission', 0) or 0
+                                data = {
+                                    'Ticker': t['Ticker'], 'Open Date': t['Open Date'],
+                                    'Close Date': datetime.now().strftime('%Y-%m-%d'),
+                                    'Close Price': -cp,
+                                    'Close Comm.': cc,
+                                }
+                                print(f"Callback: Successfully processed close for remaining short leg {t.get('Short Symbol')} for {t['Ticker']}. Filled: {getattr(filled, 'id', 'N/A')}")
+                                trade_fill_queue.put((update_trade, data))
+
+                            th = monitor_fill_async(client, single_leg_order, _on_single_short_leg_closed)
+                            trade_monitor_threads.append(th)
+                        else:
+                            print(f"Failed to place order to close single short leg {short_symbol} for {trade['Ticker']}. Position may require manual review.")
+
+                    elif not short_quotable and not long_quotable:
+                        print(f"Both legs for {trade['Ticker']} ({short_symbol}, {long_symbol}) are unquotable. Marking trade as closed with $0 value.")
+                        data_both_unquotable = {
+                            'Ticker': trade['Ticker'], 'Open Date': trade['Open Date'],
+                            'Close Date': datetime.now().strftime('%Y-%m-%d'),
+                            'Close Price': 0, 'Close Comm.': 0,
+                        }
+                        trade_fill_queue.put((update_trade, data_both_unquotable))
+                    
+                    elif short_quotable and long_quotable:
+                        print(f"Spread order failed for {trade['Ticker']}, but both legs ({short_symbol}, {long_symbol}) appear individually quotable. Original attempt to close as spread did not succeed. Skipping automated single leg closure for now.")
+                    else:
+                        print(f"Could not determine specific closing action for {trade['Ticker']} ({short_symbol}, {long_symbol}). Original close order failed. Skipping monitor.")
         except Exception as e:
             print(f"Error closing trade: {e}")
     # wait for all close-trade monitor threads before proceeding
