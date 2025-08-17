@@ -2,6 +2,7 @@ name: Earnings Trade Automation
 
 # This workflow runs on push, pull request, and at key US market times for trade open/close (per trade_key_points.md)
 on:
+  workflow_dispatch:
   schedule:
     # 9:40 AM ET (Eastern Time)
     - cron: '40 13 * * 1-5' # 9:40 AM ET during EST (UTC-5)
